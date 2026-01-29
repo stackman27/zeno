@@ -39,11 +39,20 @@ const (
 )
 
 func DetectProjectType(repoDir string) (ProjectType, error) {
-	has := func(path string) bool {
-		_, err := os.Stat(filepath.Join(repoDir, path))
+	has := func(rel string) bool {
+		_, err := os.Stat(filepath.Join(repoDir, rel))
 		return err == nil
 	}
 
+	// TODO MAKE THIS MORE GENERIC
+	// monorepo: python-server + react-frontend
+	monoPy := has("python-server/requirements.txt") || has("python-server/pyproject.toml") || has("python-server/Pipfile")
+	monoNode := has("react-frontend/package.json")
+	if monoPy && monoNode {
+		return ProjPolyglot, nil
+	}
+
+	// repo-root layout
 	py := has("pyproject.toml") || has("requirements.txt") || has("Pipfile")
 	node := has("package.json")
 
@@ -109,17 +118,19 @@ func main() {
 
 func usage() {
 	fmt.Println("Usage:")
-	fmt.Println("  myrunner run --repo <url> [--ref main] --workflow <run|test|lint|build> --entry <file> [--publish 0] [--timeout 10m]")
+	fmt.Println("  myrunner run --repo <url> [--ref main] --workflow <run|test|lint|build> [--service all|ui|api] [--entry <file>] [--publish-ui 0] [--publish-api 0] [--timeout 10m]")
 }
 
 func runCmd(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	repo := fs.String("repo", "", "Git repo URL (https://...)")
 	ref := fs.String("ref", "main", "Git ref (branch/tag). For SHA support add a checkout step.")
-	workflow := fs.String("workflow", "test", "Workflow: test|lint|build")
-	publish := fs.Int("publish", 0, "Host port to publish (0 = pick a free port)")
+	workflow := fs.String("workflow", "test", "Workflow: run|test|lint|build")
+	publishUI := fs.Int("publish-ui", 0, "Host port for UI (0 = pick a free port)")
+	publishAPI := fs.Int("publish-api", 0, "Host port for API (0 = pick a free port)")
+	service := fs.String("service", "all", "For polyglot run: all|ui|api")
 
-	entry := fs.String("entry", "", "Entry file to run (required for --workflow run), e.g. server.py")
+	entry := fs.String("entry", "", "Entry file to run (required for --workflow=run on non-polyglot repos)")
 	timeout := fs.Duration("timeout", 10*time.Minute, "Timeout (e.g. 10m, 1h)")
 	fs.Parse(args)
 
@@ -128,21 +139,8 @@ func runCmd(args []string) {
 		os.Exit(2)
 	}
 
-	if *entry == "" {
-		fmt.Println("error: --entry is required (e.g. --entry server.py)")
-		os.Exit(2)
-	}
-
-	hostPort := *publish
-	if hostPort == 0 {
-		p, err := pickFreePort()
-		if err != nil {
-			fmt.Println("error: failed to pick a free port:", err)
-			os.Exit(2)
-		}
-		hostPort = p
-	}
-	fmt.Printf("[info] will publish on http://localhost:%d\n", hostPort)
+	needUI := false
+	needAPI := false
 
 	wf := AllowedCommand(*workflow)
 	if !wf.Valid() {
@@ -150,8 +148,61 @@ func runCmd(args []string) {
 		os.Exit(2)
 	}
 
+	svc := strings.ToLower(*service)
+	if svc != "all" && svc != "ui" && svc != "api" {
+		fmt.Println("error: --service must be one of all|ui|api")
+		os.Exit(2)
+	}
+
+	if wf == CmdRun {
+		// For run, service decides which ports we need.
+		if svc == "all" {
+			needAPI = true
+			needUI = true
+		} else if svc == "api" {
+			needUI = false
+			needAPI = true
+		} else if svc == "ui" {
+			needUI = true
+			needAPI = false
+		}
+	} else {
+		// For test/lint/build you don't need any published ports.
+		needUI = false
+		needAPI = false
+	}
+
+	hostPortPublishUI := 0
+	hostPortPublishAPI := 0
+
+	if needUI {
+		hostPortPublishUI = *publishUI
+		if hostPortPublishUI == 0 {
+			p, err := pickFreePort()
+			if err != nil {
+				fmt.Println("error: failed to pick a free port:", err)
+				os.Exit(2)
+			}
+			hostPortPublishUI = p
+		}
+		fmt.Printf("[info] UI:  http://localhost:%d\n", hostPortPublishUI)
+	}
+
+	if needAPI {
+		hostPortPublishAPI = *publishAPI
+		if hostPortPublishAPI == 0 {
+			p, err := pickFreePort()
+			if err != nil {
+				fmt.Println("error: failed to pick a free port:", err)
+				os.Exit(2)
+			}
+			hostPortPublishAPI = p
+		}
+		fmt.Printf("[info] API: http://localhost:%d\n", hostPortPublishAPI)
+	}
+
 	ctx := context.Background()
-	res, err := RunRepo(ctx, *repo, *ref, wf, *entry, hostPort, *timeout, func(line string) {
+	res, err := RunRepo(ctx, *repo, *ref, wf, svc, *entry, hostPortPublishUI, hostPortPublishAPI, *timeout, func(line string) {
 		fmt.Print(line)
 	})
 	if err != nil {
@@ -170,8 +221,10 @@ func RunRepo(
 	repoURL string,
 	ref string,
 	cmd AllowedCommand,
+	service string,
 	entry string,
-	hostPort int,
+	hostPortPublishUI int,
+	hostPortPublishAPI int,
 	timeout time.Duration,
 	onLog func(line string),
 ) (*RunResult, error) {
@@ -206,6 +259,10 @@ func RunRepo(
 		onLog(fmt.Sprintf("[info] detected project type: %s\n", pt))
 	}
 
+	if cmd == CmdRun && pt != ProjPolyglot && service != "ui" && entry == "" {
+		return nil, fmt.Errorf("--entry is required for %s repos when --workflow=run", pt)
+	}
+
 	// Ensure image exists (build if missing)
 	image, err := EnsureRunnerImage(ctx, pt, onLog)
 	if err != nil {
@@ -215,22 +272,21 @@ func RunRepo(
 	// Run in Docker
 	var stdoutBuf, stderrBuf bytes.Buffer
 	extraEnv := map[string]string{}
-	if v := os.Getenv("TEST_OPENAI_API_KEY"); v != "" {
-		extraEnv["TEST_OPENAI_API_KEY"] = v
+	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
+		extraEnv["OPENAI_API_KEY"] = v
 	}
 
 	exitCode, runErr := RunDockerWorkflow(
-		ctx,
-		image,
-		repoDir,
-		onLog,
-		&stdoutBuf,
-		&stderrBuf,
+		ctx, image, repoDir, onLog,
+		&stdoutBuf, &stderrBuf,
+		pt,
 		cmd,
-		entry, // or from a --entry flag
-		"",    // or from a --env-file flag
+		service, // NEW
+		entry,
+		"",
 		extraEnv,
-		hostPort,
+		hostPortPublishUI,
+		hostPortPublishAPI,
 	)
 
 	return &RunResult{
@@ -275,19 +331,20 @@ func RunDockerWorkflow(
 	repoDir string,
 	onLog func(string),
 	stdoutBuf, stderrBuf io.Writer,
+	pt ProjectType,
 	workflow AllowedCommand,
-	entry string, // NEW: python entrypoint like server.py
-	envFile string, // NEW: path to .env file (optional)
-	extraEnv map[string]string, // NEW: extra env vars (optional)
-	hostPort int,
+	service string, // NEW
+	entry string,
+	envFile string,
+	extraEnv map[string]string,
+	uiHostPort int,
+	apiHostPort int,
 ) (int, error) {
 	workDir, err := os.MkdirTemp("", "myrunner-work-*")
 	if err != nil {
 		return -1, err
 	}
 	defer os.RemoveAll(workDir)
-
-	containerPort := 5001 // keep fixed for now
 
 	args := []string{
 		"run", "--rm",
@@ -297,31 +354,53 @@ func RunDockerWorkflow(
 		"--security-opt=no-new-privileges:true",
 		"--cap-drop=ALL",
 		"-e", "WORKFLOW=" + string(workflow),
-		"-e", "TARGET_PORT=5000",
 	}
 
-	args = append(args, "-p", fmt.Sprintf("%d:%d", hostPort, containerPort))
-	args = append(args,
-		"-e", "EXPOSE_PORT=5001",
-		"-e", "TARGET_PORT=5000",
-	)
+	// ---- polyglot monorepo RUN: publish UI + API ----
+	if pt == ProjPolyglot && workflow == CmdRun {
+		frontExpose := 3001
+		backExpose := 5001
 
-	// Pass entrypoint to container (runner.sh can default if empty)
+		if (service == "all" || service == "ui") && uiHostPort != 0 {
+			args = append(args, "-p", fmt.Sprintf("%d:%d", uiHostPort, frontExpose))
+			args = append(args, "-e", "FRONT_EXPOSE_PORT=3001", "-e", "FRONT_TARGET_PORT=3000")
+		}
+		if (service == "all" || service == "api") && apiHostPort != 0 {
+			args = append(args, "-p", fmt.Sprintf("%d:%d", apiHostPort, backExpose))
+			args = append(args, "-e", "BACK_EXPOSE_PORT=5001", "-e", "BACK_TARGET_PORT=5000")
+		}
+
+	} else {
+
+		// ---- single-port mode (python-only or node-only) ----
+		exposePort := 5001
+		targetPort := 5000
+
+		if uiHostPort != 0 {
+			args = append(args, "-p", fmt.Sprintf("%d:%d", uiHostPort, exposePort))
+		}
+		args = append(args,
+			"-e", fmt.Sprintf("EXPOSE_PORT=%d", exposePort),
+			"-e", fmt.Sprintf("TARGET_PORT=%d", targetPort),
+		)
+
+	}
+
+	args = append(args, "-e", "SERVICE="+service)
+
+	// ENTRY (only matters for non-monorepo python/node right now)
 	if entry != "" {
 		args = append(args, "-e", "ENTRY="+entry)
 	}
 
-	// Optional: env-file support (e.g. .env containing OPENAI_API_KEY=...)
 	if envFile != "" {
 		args = append(args, "--env-file", envFile)
 	}
 
-	// Optional: pass through a couple env vars explicitly
 	for k, v := range extraEnv {
 		args = append(args, "-e", k+"="+v)
 	}
 
-	// Mounts + image
 	args = append(args,
 		"-v", repoDir+":/input:ro",
 		"-v", workDir+":/work:rw",
