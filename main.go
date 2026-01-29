@@ -118,7 +118,7 @@ func main() {
 
 func usage() {
 	fmt.Println("Usage:")
-	fmt.Println("  myrunner run --repo <url> [--ref main] --workflow <run|test|lint|build> [--service all|ui|api] [--entry <file>] [--publish-ui 0] [--publish-api 0] [--timeout 10m]")
+	fmt.Println("zeno run --repo <url> [--ref main] --workflow <run|test|lint|build> [--service all|ui|api] [--entry <file>] [--publish-ui 0] [--publish-api 0] [--timeout 10m]")
 }
 
 func runCmd(args []string) {
@@ -238,7 +238,7 @@ func RunRepo(
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	repoDir, err := os.MkdirTemp(".", "myrunner-repo-*")
+	repoDir, err := os.MkdirTemp(".", "zeno-repo-*")
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +340,7 @@ func RunDockerWorkflow(
 	uiHostPort int,
 	apiHostPort int,
 ) (int, error) {
-	workDir, err := os.MkdirTemp("", "myrunner-work-*")
+	workDir, err := os.MkdirTemp("", "zeno-work-*")
 	if err != nil {
 		return -1, err
 	}

@@ -1,86 +1,137 @@
-# Sandbox Orchestrator + Pluggable Runtimes (“Lanes”)
+# ZENO
 
-**Moat:** _“Speed is nothing without precision.”_
-
-This repository/design describes a **bounded execution sandbox + verification framework** that is **extensible** via pluggable runtimes (“lanes”). We intentionally avoid a “run anything” universal sandbox in the MVP because that becomes complex quickly and tends to sacrifice correctness.
+`zeno` is a lightweight CLI utility that clones Git repositories and executes workflows within a hardened Docker "runner" environment.
 
 ---
 
-## Why this exists
+## 🚀 Quickstart
 
-### Problem
-- A “universal” sandbox that can run anything is **very complex**.
-- Many tasks that feel small still cause unnecessary back-and-forth between **Eng / Product / GTM**, and take longer than expected.
-- We need confidence and repeatability; fast execution without verification is not useful.
+### 1. Prepare the Docker Runner
+Ensure a clean environment by removing old images and building the latest runner:
+Note: only need to run this if Dockerfile or runner.sh changes
+```bash
+# Clean existing image
+docker rmi zeno/runner-polyglot:latest
 
-### Goal
-Build an **extensible sandbox verification framework** where we start with **1–2 lanes** we can guarantee are correct and safe, then expand lane-by-lane.
+# Build the hardened runner
+docker build -t zeno/runner-polyglot:latest -f runner-polyglot.Dockerfile .
+```
+
+### 2. Build the Zeno Binary
+Compile the Go source code into an executable:
+
+```bash
+go build -o zeno .
+```
+
+### 3. Set Environment Variables
+Zeno requires an OpenAI API key for workflow execution:
+
+```bash
+export OPENAI_API_KEY="your_api_key_here"
+```
+
+## 🛠 Usage Examples
+The following examples utilize the chat-buddy repository for testing.
+
+### Run Full Stack (UI + API)
+To launch both services simultaneously:
+
+```bash
+./zeno run \
+  --repo https://github.com/stackman27/chat-buddy \
+  --workflow run \
+  --service all \
+  --publish-ui 0 \
+  --publish-api 0
+```
+
+Expected Output: Zeno will provide dynamic local URLs upon a successful start:
+
+```
+[info] UI: http://localhost:XXXXX
+[info] API: http://localhost:YYYYY
+```
+
+### Run Services Individually
+
+#### UI Only:
+
+```bash
+./zeno run \
+  --repo https://github.com/stackman27/chat-buddy \
+  --workflow run \
+  --service ui \
+  --publish-ui 0
+```
+
+#### API Only:
+
+```bash
+./zeno run \
+  --repo https://github.com/stackman27/chat-buddy \
+  --workflow run \
+  --service api \
+  --publish-api 0
+```
+
+##  Verification
+To verify the API is responding correctly, run:
+
+```bash
+curl -i http://localhost:YYYYY/
+```
+
+For the frontend, simply open the UI URL provided in the terminal in your preferred web browser.
 
 ---
 
-## Requirements
+## 🔧 How It Works
 
-### Must-haves
-- **Bounded execution**: each lane has strict scope and a verification contract.
-- **Precision-first**: changes must be provably correct (or fail closed).
-- **Local execution**: code must not be shared with us; execution happens in the user's environment.
-- **Hot reload-like behavior**: PM can iterate quickly (edit → run → compare) without restarting the sandbox.
-- **Extensible**: new lanes can be added without redesigning the system.
+### High-Level Flow
 
----
+1. Clone repo into a temp directory
+2. Detect project type:
+   - `python`
+   - `node`
+   - `polyglot` monorepo (`python-server/` + `react-frontend/`)
+3. Ensure runner image exists (build if missing)
+4. Run container with:
+   - repo mounted read-only at `/input`
+   - scratch directory mounted read-write at `/work`
+   - required env vars for workflow + service selection
+   - published ports for UI/API depending on `--service`
 
-## Core principle
+### Why Copy `/input` → `/work/repo`?
 
-> You don’t need to test everything in one environment. You need:  
-> **a Sandbox Orchestrator + Pluggable Runtimes (“lanes”).**
+`/input` is mounted read-only, so installs (`pip`/`npm`) would fail.
 
----
+`runner.sh` copies repo contents into `/work/repo` so dependencies can be installed without modifying the mount.
 
-## MVP lanes (examples)
+### Python Installs (PEP 668 / Permission Issues)
 
-### Lane A — Prompt Engineering Sandbox (RepoA)
-Primary goal: enable PMs to iteratively improve prompts with rapid feedback + strong verification gates.
+The runner creates a venv at:
 
-### Lane B — Backend/Frontend Change (RepoB)
-Small/mid tickets that are low dependency and reliably verifiable (build/lint/unit tests).
+```
+/work/venv
+```
 
-### Lane C — Docs Update from Recent Code (RepoB)
-Generate/update docs from current repo state with verification (doc build, lint, link check, etc).
+Then installs requirements into that venv. This avoids:
 
-> The MVP can launch with Lane A + one of (Lane B / Lane C), depending on what yields the most value fastest.
+- Debian "externally managed environment" (PEP 668) errors
+- permission errors from writing to system site-packages
 
----
+### Polyglot Ports and Proxying
 
-## Prompt Engineering Lane (RepoA) — Architecture
+Inside the container (typical):
 
-### Bootstrap
-- **[Bootstrap]** Retrieve the initial prompt from **RepoA**, pinned to a **Git commit**.
-- This becomes the **baseline prompt** for the session.
+- CRA dev server listens on `3000`
+- Flask API listens on `5000`
 
-### Sandbox engine (local, Docker)
-The local runner spins up a Docker container containing:
+To publish stable "exposed" ports, the runner uses `socat`:
 
-- **Sandbox UI** (dev playground) with an **Output panel** showing what the end-user would see.
-  - Playground controls:
-    - edit prompt
-    - edit context
-    - run
-    - compare
-    - verify
-  - Rendered output view:
-    - “what the user sees” panel (preview)
-- **Backend API** (optional but recommended):
-  - runs prompt execution
-  - stores session state (overlay)
-  - exposes verification endpoints
-- **Prompt runtime**
-  - templating / variable interpolation
-  - tool mocks (or record/replay, optional)
-  - adapters for running against production-shaped (or production) data
-- **Repo mount**
-  - RepoA mounted into the container at `/workspace`
-  - ideally **read-only**, with controlled write only during explicit save
+- Frontend: `3001` → `3000`
+- Backend: `5001` → `5000`
 
-Runner prints something like:
+Then Docker publishes host ports dynamically to those exposed ports.
 
-# zeno
