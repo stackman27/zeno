@@ -135,3 +135,9 @@ To publish stable "exposed" ports, the runner uses `socat`:
 
 Then Docker publishes host ports dynamically to those exposed ports.
 
+--- 
+
+## Todos for MVP 
+- [] hotreload 
+- [] The repo shouldn't be an emphemerally cloned it should persist so AI agent could make changes to it and push to github
+- [] Run it on 1 more standalone UI or nodejs backend  
