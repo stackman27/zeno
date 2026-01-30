@@ -38,12 +38,13 @@ The following examples utilize the chat-buddy repository for testing.
 To launch both services simultaneously:
 
 ```bash
-./zeno run \
+./zeno run \                          
   --repo https://github.com/stackman27/chat-buddy \
   --workflow run \
   --service all \
   --publish-ui 0 \
-  --publish-api 0
+  --publish-api 0 \
+  --dir "$(pwd)/repos/chat-buddy"
 ```
 
 Expected Output: Zeno will provide dynamic local URLs upon a successful start:

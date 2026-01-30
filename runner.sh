@@ -19,9 +19,8 @@ BACK_TARGET_PORT="${BACK_TARGET_PORT:-5000}"
 EXPOSE_PORT="${EXPOSE_PORT:-5001}"
 TARGET_PORT="${TARGET_PORT:-5000}"
 
-mkdir -p /work/repo
-tar -C /input -cf - . | tar -C /work/repo -xf -
-cd /work/repo
+cd /repo || { echo "/repo not mounted" >&2; exit 65; }
+
 
 PROJECT_VENV="/work/venv"
 
@@ -67,24 +66,59 @@ PY
     popd >/dev/null
   fi
 
-  # --- react frontend ---
-  if $want_ui && [ -d react-frontend ]; then
-    pushd react-frontend >/dev/null
-    if [ -f package-lock.json ]; then npm ci; else npm install; fi
+# --- react frontend ---
+if $want_ui && [ -d react-frontend ]; then
+  pushd react-frontend >/dev/null
 
-    export HOST=0.0.0.0
-    export PORT="${FRONT_TARGET_PORT}"   # usually 3000
-    npm start &
-    FRONT_PID=$!
+  # CRA bind + port inside container
+  export HOST=0.0.0.0
+  export PORT="${FRONT_EXPOSE_PORT:-3001}"
 
-    popd >/dev/null
+  # npm cache locations (avoid writing into repo mount)
+  export NPM_CONFIG_PREFIX="/work/npm-global"
+  export npm_config_cache="/work/.npm-cache"
+  mkdir -p "$NPM_CONFIG_PREFIX" "$npm_config_cache"
+
+  # Keep deps in /work, but present them as ./node_modules
+mkdir -p /work/react-node_modules/node_modules
+if [ ! -L node_modules ]; then
+  rm -rf node_modules
+  ln -s /work/react-node_modules/node_modules node_modules
+fi
+
+  # Install deps only if missing
+  if [ ! -x node_modules/.bin/react-scripts ]; then
+    rm -rf /work/react-node_modules/node_modules/*
+    npm install
   fi
+
+  # Watch reliability on bind mounts
+  export CHOKIDAR_USEPOLLING=true
+  export WATCHPACK_POLLING=true
+  export CHOKIDAR_INTERVAL=300
+  export WATCHPACK_POLLING_INTERVAL=300
+
+ 
+export WDS_SOCKET_HOST=localhost
+export WDS_SOCKET_PORT=$PORT
+export WDS_SOCKET_PATH=/sockjs-node
+
+  export FAST_REFRESH=true
+
+  npm start &
+  FRONT_PID=$!
+
+  popd >/dev/null
+fi
+
+
+
 
   # --- proxies (only for what we started) ---
-  if $want_ui; then
-    socat "TCP-LISTEN:${FRONT_EXPOSE_PORT},fork,reuseaddr" "TCP:127.0.0.1:${FRONT_TARGET_PORT}" &
-    FRONT_PROXY_PID=$!
-  fi
+#   if $want_ui; then
+#     socat "TCP-LISTEN:${FRONT_EXPOSE_PORT},fork,reuseaddr" "TCP:127.0.0.1:${FRONT_TARGET_PORT}" &
+#     FRONT_PROXY_PID=$!
+#   fi
 
   if $want_api; then
     socat "TCP-LISTEN:${BACK_EXPOSE_PORT},fork,reuseaddr" "TCP:127.0.0.1:${BACK_TARGET_PORT}" &

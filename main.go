@@ -129,6 +129,7 @@ func runCmd(args []string) {
 	publishUI := fs.Int("publish-ui", 0, "Host port for UI (0 = pick a free port)")
 	publishAPI := fs.Int("publish-api", 0, "Host port for API (0 = pick a free port)")
 	service := fs.String("service", "all", "For polyglot run: all|ui|api")
+	checkoutDir := fs.String("dir", "", "Checkout directory for the repo (persistent). If empty, defaults to ./repos/<name>")
 
 	entry := fs.String("entry", "", "Entry file to run (required for --workflow=run on non-polyglot repos)")
 	timeout := fs.Duration("timeout", 10*time.Minute, "Timeout (e.g. 10m, 1h)")
@@ -137,6 +138,12 @@ func runCmd(args []string) {
 	if *repo == "" {
 		fmt.Println("error: --repo is required")
 		os.Exit(2)
+	}
+
+	if *checkoutDir == "" {
+		// derive repo name: chat-buddy from https://github.com/stackman27/chat-buddy
+		name := strings.TrimSuffix(filepath.Base(*repo), ".git")
+		*checkoutDir = filepath.Join("repos", name)
 	}
 
 	needUI := false
@@ -202,7 +209,7 @@ func runCmd(args []string) {
 	}
 
 	ctx := context.Background()
-	res, err := RunRepo(ctx, *repo, *ref, wf, svc, *entry, hostPortPublishUI, hostPortPublishAPI, *timeout, func(line string) {
+	res, err := RunRepo(ctx, *repo, *ref, wf, svc, *entry, hostPortPublishUI, hostPortPublishAPI, *timeout, *checkoutDir, func(line string) {
 		fmt.Print(line)
 	})
 	if err != nil {
@@ -226,6 +233,7 @@ func RunRepo(
 	hostPortPublishUI int,
 	hostPortPublishAPI int,
 	timeout time.Duration,
+	checkoutDir string,
 	onLog func(line string),
 ) (*RunResult, error) {
 	if ref == "" {
@@ -238,16 +246,40 @@ func RunRepo(
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	repoDir, err := os.MkdirTemp(".", "zeno-repo-*")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(repoDir)
+	repoDir := checkoutDir
 
-	// Clone
-	cloneArgs := []string{"clone", "--depth", "1", "--branch", ref, repoURL, repoDir}
-	if _, err := runProcessCapture(ctx, "git", cloneArgs, "", onLog, io.Discard, io.Discard); err != nil {
-		return nil, fmt.Errorf("git clone failed: %w", err)
+	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
+		// first time clone
+		if err := os.MkdirAll(filepath.Dir(repoDir), 0o755); err != nil {
+			return nil, err
+		}
+		cloneArgs := []string{"clone", "--branch", ref, repoURL, repoDir}
+		if _, err := runProcessCapture(ctx, "git", cloneArgs, "", onLog, io.Discard, io.Discard); err != nil {
+			return nil, fmt.Errorf("git clone failed: %w", err)
+		}
+	} else {
+		// repo exists: check dirty first
+		dirtyArgs := []string{"-C", repoDir, "status", "--porcelain"}
+		var out bytes.Buffer
+		_, _ = runProcessCapture(ctx, "git", dirtyArgs, "", nil, &out, io.Discard)
+
+		if strings.TrimSpace(out.String()) != "" {
+			if onLog != nil {
+				onLog("[warn] repo has local changes; skipping fetch/checkout\n")
+			}
+		} else {
+			// safe to update
+			fetchArgs := []string{"-C", repoDir, "fetch", "origin", ref, "--depth", "1"}
+			_, _ = runProcessCapture(ctx, "git", fetchArgs, "", onLog, io.Discard, io.Discard)
+
+			checkoutArgs := []string{"-C", repoDir, "checkout", ref}
+			if _, err := runProcessCapture(ctx, "git", checkoutArgs, "", onLog, io.Discard, io.Discard); err != nil {
+				checkoutHead := []string{"-C", repoDir, "checkout", "FETCH_HEAD"}
+				if _, err2 := runProcessCapture(ctx, "git", checkoutHead, "", onLog, io.Discard, io.Discard); err2 != nil {
+					return nil, fmt.Errorf("git checkout failed: %w", err)
+				}
+			}
+		}
 	}
 
 	// Detect
@@ -363,7 +395,7 @@ func RunDockerWorkflow(
 
 		if (service == "all" || service == "ui") && uiHostPort != 0 {
 			args = append(args, "-p", fmt.Sprintf("%d:%d", uiHostPort, frontExpose))
-			args = append(args, "-e", "FRONT_EXPOSE_PORT=3001", "-e", "FRONT_TARGET_PORT=3000")
+			args = append(args, "-e", "FRONT_PORT=3001") // new: single source of truth
 		}
 		if (service == "all" || service == "api") && apiHostPort != 0 {
 			args = append(args, "-p", fmt.Sprintf("%d:%d", apiHostPort, backExpose))
@@ -387,7 +419,7 @@ func RunDockerWorkflow(
 	}
 
 	args = append(args, "-e", "SERVICE="+service)
-
+	args = append(args, "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()))
 	// ENTRY (only matters for non-monorepo python/node right now)
 	if entry != "" {
 		args = append(args, "-e", "ENTRY="+entry)
@@ -402,10 +434,15 @@ func RunDockerWorkflow(
 	}
 
 	args = append(args,
-		"-v", repoDir+":/input:ro",
+		"-v", repoDir+":/repo:rw",
 		"-v", workDir+":/work:rw",
-		image,
 	)
+
+	// if pt == ProjPolyglot {
+	// 	args = append(args, "-v", "zeno_node_modules:/work/react-node_modules")
+	// }
+
+	args = append(args, image)
 
 	return runProcessCapture(ctx, "docker", args, "", onLog, stdoutBuf, stderrBuf)
 }
