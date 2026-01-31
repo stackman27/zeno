@@ -105,7 +105,17 @@ export WDS_SOCKET_PATH=/sockjs-node
 
   export FAST_REFRESH=true
 
-  npm start &
+  # Disable ESLint and treat warnings as non-fatal
+  export DISABLE_ESLINT_PLUGIN=true
+  export ESLINT_NO_DEV_ERRORS=true
+  export CI=false
+
+  # Use 'dev' script if available, otherwise fall back to 'start'
+  if node -e "p=require('./package.json');process.exit(!(p.scripts&&p.scripts.dev))" 2>/dev/null; then
+    npm run dev &
+  else
+    npm start &
+  fi
   FRONT_PID=$!
 
   popd >/dev/null
