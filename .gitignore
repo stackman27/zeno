@@ -2,4 +2,4 @@ bin/
 .env
 zeno
 repos/
-workspaces/
+workspaces/workspaces/
