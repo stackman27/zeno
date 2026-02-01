@@ -283,12 +283,12 @@ function App() {
 
   return (
     <ChakraProvider theme={theme}>
-      <Box minH="100vh" bg="#f0f1f2" color="gray.800">
-        {/* Header - Statsig-inspired clean header */}
+      <Box minH="100vh" bg="#f9fafb" color="gray.800" position="relative" overflow="hidden">
+        {/* Header - Dark header */}
         <Box
-          bg="#fafbfb"
+          bg="#1f2937"
           borderBottom="1px solid"
-          borderColor="#d8d9da"
+          borderColor="#374151"
           py={4}
           px={8}
         >
@@ -298,7 +298,7 @@ function App() {
                 <Box
                   w={9}
                   h={9}
-                  bg="gray.600"
+                  bg="#4b5563"
                   borderRadius="3px"
                   display="flex"
                   alignItems="center"
@@ -310,54 +310,54 @@ function App() {
                   Z
                 </Box>
                 <Box>
-                  <Heading size="md" color="gray.700" fontWeight="700" letterSpacing="-0.2px">
+                  <Heading size="md" color="#f3f4f6" fontWeight="700" letterSpacing="-0.2px">
                     Zeno
                   </Heading>
                 </Box>
               </Flex>
-              <Text color="gray.500" fontSize="sm" fontWeight="500">
+              <Text color="#9ca3af" fontSize="sm" fontWeight="500">
                 Docker Runner
               </Text>
             </Flex>
           </Container>
         </Box>
 
-        {/* Tabs - Statsig-inspired clean tabs */}
+        {/* Tabs - Dark tabs bar */}
         <Tabs index={activeTab} onChange={setActiveTab} colorScheme="gray" isLazy>
-          <Box bg="#fafbfb" borderBottom="1px solid" borderColor="#d8d9da">
+          <Box bg="#374151" borderBottom="1px solid" borderColor="#4b5563">
             <Container maxW="container.xl" px={8}>
               <TabList borderBottom="none" gap={1}>
                 <Tab
                   fontWeight="500"
-                  color="gray.500"
+                  color="#d1d5db"
                   fontSize="sm"
                   px={4}
                   py={3}
                   mb="-1px"
                   borderBottom="2px solid transparent"
                   _selected={{ 
-                    color: 'gray.700', 
-                    borderBottomColor: 'gray.600',
+                    color: '#f9fafb', 
+                    borderBottomColor: '#60a5fa',
                     fontWeight: '600'
                   }}
-                  _hover={{ color: 'gray.700' }}
+                  _hover={{ color: '#e5e7eb' }}
                 >
                   Control Panel
                 </Tab>
                 <Tab
                   fontWeight="500"
-                  color="gray.500"
+                  color="#d1d5db"
                   fontSize="sm"
                   px={4}
                   py={3}
                   mb="-1px"
                   borderBottom="2px solid transparent"
                   _selected={{ 
-                    color: 'gray.700', 
-                    borderBottomColor: 'gray.600',
+                    color: '#f9fafb', 
+                    borderBottomColor: '#60a5fa',
                     fontWeight: '600'
                   }}
-                  _hover={{ color: 'gray.700' }}
+                  _hover={{ color: '#e5e7eb' }}
                 >
                   Browser
                 </Tab>
@@ -369,26 +369,26 @@ function App() {
             {/* Control Panel Tab */}
             <TabPanel p={0}>
               <Container maxW="container.xl" py={8} px={8}>
-                {/* Statsig-inspired card design */}
+                {/* Card design with varied grays */}
                 <Box 
-                  bg="#fafbfb" 
+                  bg="#ffffff" 
                   borderRadius="4px" 
                   p={8} 
                   mb={6} 
                   border="1px solid" 
-                  borderColor="#d8d9da"
-                  boxShadow="0 1px 2px 0 rgba(0, 0, 0, 0.03)"
+                  borderColor="#e5e7eb"
+                  boxShadow="0 1px 3px 0 rgba(0, 0, 0, 0.1)"
                 >
-                  <Heading size="md" mb={1} color="gray.700" fontWeight="700" letterSpacing="-0.1px">
+                  <Heading size="md" mb={1} color="#111827" fontWeight="700" letterSpacing="-0.1px">
                     Configuration
                   </Heading>
-                  <Text color="gray.500" mb={6} fontSize="sm" fontWeight="500">
+                  <Text color="#6b7280" mb={6} fontSize="sm" fontWeight="500">
                     Configure your Docker workflow settings
                   </Text>
                   <form onSubmit={handleSubmit}>
                     <VStack spacing={6} align="stretch">
                       <FormControl isRequired>
-                        <FormLabel fontWeight="600" color="gray.600" mb={2} fontSize="sm">
+                        <FormLabel fontWeight="600" color="#374151" mb={2} fontSize="sm">
                           Repository URL
                         </FormLabel>
                         <Input
@@ -396,23 +396,23 @@ function App() {
                           onChange={(e) => handleInputChange('repo', e.target.value)}
                           placeholder="https://github.com/user/repo"
                           bg="#ffffff"
-                          borderColor="#c9cacb"
+                          borderColor="#d1d5db"
                           borderWidth="1px"
                           size="md"
-                          color="gray.700"
+                          color="#111827"
                           fontSize="14px"
                           fontWeight="400"
                           letterSpacing="-0.01em"
-                          _hover={{ borderColor: '#a8a9aa', bg: '#fafbfb' }}
-                          _focus={{ borderColor: 'gray.500', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.08)', bg: '#ffffff' }}
-                          _placeholder={{ color: 'gray.400', fontWeight: '400', opacity: 1 }}
+                          _hover={{ borderColor: '#9ca3af', bg: '#f9fafb' }}
+                          _focus={{ borderColor: '#6b7280', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.1)', bg: '#ffffff' }}
+                          _placeholder={{ color: '#9ca3af', fontWeight: '400', opacity: 1 }}
                         />
                       </FormControl>
 
                       <Grid templateColumns="repeat(3, 1fr)" gap={6}>
                         <GridItem>
                           <FormControl>
-                            <FormLabel fontWeight="600" color="gray.700" mb={2} fontSize="sm">
+                            <FormLabel fontWeight="600" color="#374151" mb={2} fontSize="sm">
                               Git Ref
                             </FormLabel>
                             <Input
@@ -420,39 +420,39 @@ function App() {
                               onChange={(e) => handleInputChange('ref', e.target.value)}
                               placeholder="main"
                               bg="#ffffff"
-                              borderColor="#c9cacb"
+                              borderColor="#d1d5db"
                               borderWidth="1px"
                               size="md"
-                              color="gray.700"
+                              color="#111827"
                               fontSize="14px"
                               fontWeight="400"
                               letterSpacing="-0.01em"
-                              _hover={{ borderColor: '#a8a9aa', bg: '#fafbfb' }}
-                              _focus={{ borderColor: 'gray.500', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.08)', bg: '#ffffff' }}
-                              _placeholder={{ color: 'gray.400', fontWeight: '400', opacity: 1 }}
+                              _hover={{ borderColor: '#9ca3af', bg: '#f9fafb' }}
+                              _focus={{ borderColor: '#6b7280', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.1)', bg: '#ffffff' }}
+                              _placeholder={{ color: '#9ca3af', fontWeight: '400', opacity: 1 }}
                             />
                           </FormControl>
                         </GridItem>
 
                         <GridItem>
                           <FormControl isRequired>
-                            <FormLabel fontWeight="600" color="gray.700" mb={2} fontSize="sm">
+                            <FormLabel fontWeight="600" color="#374151" mb={2} fontSize="sm">
                               Workflow
                             </FormLabel>
                             <Select
                               value={formData.workflow}
                               onChange={(e) => handleInputChange('workflow', e.target.value)}
                               bg="#ffffff"
-                              borderColor="#c9cacb"
+                              borderColor="#d1d5db"
                               borderWidth="1px"
                               size="md"
-                              color="gray.700"
+                              color="#111827"
                               fontSize="14px"
                               fontWeight="400"
                               letterSpacing="-0.01em"
-                              _hover={{ borderColor: '#a8a9aa', bg: '#fafbfb' }}
-                              _focus={{ borderColor: 'gray.500', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.08)', bg: '#ffffff' }}
-                              _placeholder={{ color: 'gray.400', fontWeight: '400', opacity: 1 }}
+                              _hover={{ borderColor: '#9ca3af', bg: '#f9fafb' }}
+                              _focus={{ borderColor: '#6b7280', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.1)', bg: '#ffffff' }}
+                              _placeholder={{ color: '#9ca3af', fontWeight: '400', opacity: 1 }}
                             >
                               <option value="run">Run</option>
                               <option value="test">Test</option>
@@ -464,23 +464,23 @@ function App() {
 
                         <GridItem>
                           <FormControl>
-                            <FormLabel fontWeight="600" color="gray.700" mb={2} fontSize="sm">
+                            <FormLabel fontWeight="600" color="#374151" mb={2} fontSize="sm">
                               Service
                             </FormLabel>
                             <Select
                               value={formData.service}
                               onChange={(e) => handleInputChange('service', e.target.value)}
                               bg="#ffffff"
-                              borderColor="#c9cacb"
+                              borderColor="#d1d5db"
                               borderWidth="1px"
                               size="md"
-                              color="gray.700"
+                              color="#111827"
                               fontSize="14px"
                               fontWeight="400"
                               letterSpacing="-0.01em"
-                              _hover={{ borderColor: '#a8a9aa', bg: '#fafbfb' }}
-                              _focus={{ borderColor: 'gray.500', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.08)', bg: '#ffffff' }}
-                              _placeholder={{ color: 'gray.400', fontWeight: '400', opacity: 1 }}
+                              _hover={{ borderColor: '#9ca3af', bg: '#f9fafb' }}
+                              _focus={{ borderColor: '#6b7280', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.1)', bg: '#ffffff' }}
+                              _placeholder={{ color: '#9ca3af', fontWeight: '400', opacity: 1 }}
                             >
                               <option value="all">All</option>
                               <option value="ui">UI</option>
@@ -490,11 +490,11 @@ function App() {
                         </GridItem>
                       </Grid>
 
-                      <Box mt={8} pt={6} borderTop="1px solid" borderColor="#d8d9da">
+                      <Box mt={8} pt={6} borderTop="1px solid" borderColor="#e5e7eb">
                         <ButtonGroup spacing={3}>
                           <Button
                             type="submit"
-                            bg="gray.600"
+                            bg="#4b5563"
                             color="white"
                             size="md"
                             leftIcon={<ChevronRightIcon />}
@@ -502,8 +502,8 @@ function App() {
                             loadingText="Running..."
                             fontWeight="600"
                             px={6}
-                            _hover={{ bg: 'gray.700' }}
-                            _active={{ bg: 'gray.800' }}
+                            _hover={{ bg: '#374151' }}
+                            _active={{ bg: '#1f2937' }}
                           >
                             Run Workflow
                           </Button>
@@ -550,13 +550,13 @@ function App() {
                   flexDirection="column"
                 >
                   <Flex align="center" justify="space-between" mb={4}>
-                    <Heading size="md" color="gray.700" fontWeight="700" letterSpacing="-0.1px">
+                    <Heading size="md" color="#111827" fontWeight="700" letterSpacing="-0.1px">
                       Output
                     </Heading>
                     {output && (
                       <Badge 
-                        bg="#e8e9ea" 
-                        color="gray.600" 
+                        bg="#f3f4f6" 
+                        color="#4b5563" 
                         px={2.5} 
                         py={1} 
                         borderRadius="3px" 
@@ -591,13 +591,13 @@ function App() {
             {/* Browser Tab - Full screen with compact navbar */}
             <TabPanel p={0}>
               <Box h="calc(100vh - 140px)" display="flex" flexDirection="column" bg="#f0f1f2">
-                {/* Compact Navbar */}
+                {/* Compact Navbar - Dark */}
                 <Box 
-                  bg="#fafbfb" 
+                  bg="#374151" 
                   px={6} 
                   py={3} 
                   borderBottom="1px solid" 
-                  borderColor="#d8d9da"
+                  borderColor="#4b5563"
                   display="flex"
                   alignItems="center"
                   gap={4}
@@ -608,14 +608,14 @@ function App() {
                       placeholder="Select service..."
                       value={selectedUrl}
                       onChange={(e) => handleUrlSelect(e.target.value)}
-                      bg="#ffffff"
-                      borderColor="#c9cacb"
+                      bg="#1f2937"
+                      borderColor="#4b5563"
                       borderWidth="1px"
                       size="sm"
-                      color="gray.700"
+                      color="#f3f4f6"
                       fontSize="sm"
-                      _hover={{ borderColor: '#a8a9aa', bg: '#fafbfb' }}
-                      _focus={{ borderColor: 'gray.500', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.08)', bg: '#ffffff' }}
+                      _hover={{ borderColor: '#6b7280', bg: '#374151' }}
+                      _focus={{ borderColor: '#60a5fa', boxShadow: '0 0 0 3px rgba(96, 165, 250, 0.2)', bg: '#1f2937' }}
                     >
                       {detectedUrls.ui && (
                         <option value={detectedUrls.ui}>UI</option>
@@ -628,15 +628,15 @@ function App() {
 
                   <Box flex={1} minW={0}>
                     <Code
-                      bg="#e8e9ea"
-                      color="gray.600"
+                      bg="#1f2937"
+                      color="#d1d5db"
                       px={3}
                       py={1.5}
                       borderRadius="3px"
                       fontSize="xs"
                       fontFamily="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace"
                       border="1px solid"
-                      borderColor="#d8d9da"
+                      borderColor="#4b5563"
                       display="block"
                       w="100%"
                       fontWeight="400"
@@ -651,8 +651,8 @@ function App() {
                   <HStack spacing={1}>
                     {detectedUrls.ui && (
                       <Badge 
-                        bg={selectedUrl === detectedUrls.ui ? 'gray.600' : '#e8e9ea'}
-                        color={selectedUrl === detectedUrls.ui ? 'white' : 'gray.600'}
+                        bg={selectedUrl === detectedUrls.ui ? '#60a5fa' : '#4b5563'}
+                        color={selectedUrl === detectedUrls.ui ? 'white' : '#d1d5db'}
                         px={2}
                         py={0.5}
                         borderRadius="3px"
@@ -666,8 +666,8 @@ function App() {
                     )}
                     {detectedUrls.api && (
                       <Badge 
-                        bg={selectedUrl === detectedUrls.api ? 'gray.600' : '#e8e9ea'}
-                        color={selectedUrl === detectedUrls.api ? 'white' : 'gray.600'}
+                        bg={selectedUrl === detectedUrls.api ? '#60a5fa' : '#4b5563'}
+                        color={selectedUrl === detectedUrls.api ? 'white' : '#d1d5db'}
                         px={2}
                         py={0.5}
                         borderRadius="3px"
@@ -689,8 +689,8 @@ function App() {
                       variant="ghost"
                       size="sm"
                       aria-label="Refresh"
-                      color="gray.500"
-                      _hover={{ bg: '#e8e9ea', color: 'gray.700' }}
+                      color="#d1d5db"
+                      _hover={{ bg: '#4b5563', color: '#f3f4f6' }}
                     />
                     <IconButton
                       icon={<ExternalLinkIcon />}
@@ -699,8 +699,8 @@ function App() {
                       variant="ghost"
                       size="sm"
                       aria-label="Open in external browser"
-                      color="gray.500"
-                      _hover={{ bg: '#e8e9ea', color: 'gray.700' }}
+                      color="#d1d5db"
+                      _hover={{ bg: '#4b5563', color: '#f3f4f6' }}
                     />
                   </HStack>
                 </Box>
@@ -721,12 +721,12 @@ function App() {
                       flexDirection="column"
                       alignItems="center"
                       justifyContent="center"
-                      bg="#f0f1f2"
+                      bg="#f3f4f6"
                     >
                       <Box
                         w={16}
                         h={16}
-                        bg="#d8d9da"
+                        bg="#e5e7eb"
                         borderRadius="3px"
                         display="flex"
                         alignItems="center"
@@ -735,10 +735,10 @@ function App() {
                       >
                         <ExternalLinkIcon w={8} h={8} color="#6b7280" />
                       </Box>
-                      <Text fontSize="lg" fontWeight="600" color="gray.600" mb={2}>
+                      <Text fontSize="lg" fontWeight="600" color="#4b5563" mb={2}>
                         No Service Selected
                       </Text>
-                      <Text fontSize="sm" color="gray.500" fontWeight="400">
+                      <Text fontSize="sm" color="#6b7280" fontWeight="400">
                         Run a workflow to see services here
                       </Text>
                     </Box>
@@ -757,9 +757,9 @@ function App() {
           top={0}
           bottom={0}
           w="400px"
-          bg="#fafbfb"
+          bg="#ffffff"
           borderLeft="1px solid"
-          borderColor="#d8d9da"
+          borderColor="#e5e7eb"
           display="flex"
           flexDirection="column"
           zIndex={1000}
@@ -767,26 +767,26 @@ function App() {
           transition="right 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
           overflow="hidden"
         >
-          {/* Chat Header */}
+          {/* Chat Header - Dark */}
           <Box
             px={4}
             py={3}
             borderBottom="1px solid"
-            borderColor="#d8d9da"
+            borderColor="#4b5563"
             display="flex"
             alignItems="center"
             justifyContent="space-between"
-            bg="#ffffff"
+            bg="#374151"
             flexShrink={0}
           >
             <HStack spacing={2}>
-              <Text fontSize="md" color="gray.700" fontWeight="600">
+              <Text fontSize="md" color="#f3f4f6" fontWeight="600">
                 AI Assistant
               </Text>
               {chatMessages.length > 0 && (
                 <Badge
-                  bg="#e8e9ea"
-                  color="gray.600"
+                  bg="#4b5563"
+                  color="#d1d5db"
                   px={2}
                   py={0.5}
                   borderRadius="3px"
@@ -803,8 +803,8 @@ function App() {
               variant="ghost"
               size="sm"
               aria-label="Close chat"
-              color="gray.500"
-              _hover={{ bg: '#e8e9ea', color: 'gray.700' }}
+              color="#d1d5db"
+              _hover={{ bg: '#4b5563', color: '#f3f4f6' }}
             />
           </Box>
 
@@ -816,13 +816,14 @@ function App() {
             display="flex"
             flexDirection="column"
             gap={4}
+            bg="#f9fafb"
           >
             {chatMessages.length === 0 ? (
               <Box textAlign="center" py={16}>
-                <Text color="gray.500" fontSize="md" fontWeight="500" mb={2}>
+                <Text color="#6b7280" fontSize="md" fontWeight="500" mb={2}>
                   Ask for changes to your application
                 </Text>
-                <Text color="gray.400" fontSize="sm">
+                <Text color="#9ca3af" fontSize="sm">
                   Type a message below to get started
                 </Text>
               </Box>
@@ -834,8 +835,8 @@ function App() {
                   maxW="85%"
                 >
                   <Box
-                    bg={msg.role === 'user' ? 'gray.600' : '#e8e9ea'}
-                    color={msg.role === 'user' ? 'white' : 'gray.700'}
+                    bg={msg.role === 'user' ? '#4b5563' : '#e5e7eb'}
+                    color={msg.role === 'user' ? 'white' : '#374151'}
                     px={4}
                     py={3}
                     borderRadius="6px"
@@ -854,7 +855,7 @@ function App() {
             px={4}
             py={4}
             borderTop="1px solid"
-            borderColor="#d8d9da"
+            borderColor="#e5e7eb"
             bg="#ffffff"
             flexShrink={0}
           >
@@ -864,7 +865,7 @@ function App() {
                 onChange={(e) => setChatInput(e.target.value)}
                 placeholder="Ask for changes..."
                 bg="#ffffff"
-                borderColor="#c9cacb"
+                borderColor="#d1d5db"
                 borderWidth="1px"
                 size="md"
                 fontSize="14px"
@@ -878,13 +879,13 @@ function App() {
                     // TODO: Send to AI and get response
                   }
                 }}
-                _hover={{ borderColor: '#a8a9aa', bg: '#fafbfb' }}
-                _focus={{ borderColor: 'gray.500', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.08)', bg: '#ffffff' }}
-                _placeholder={{ color: 'gray.400', fontWeight: '400', opacity: 1 }}
+                _hover={{ borderColor: '#9ca3af', bg: '#f9fafb' }}
+                _focus={{ borderColor: '#6b7280', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.1)', bg: '#ffffff' }}
+                _placeholder={{ color: '#9ca3af', fontWeight: '400', opacity: 1 }}
               />
               <Button
                 size="md"
-                bg="gray.600"
+                bg="#4b5563"
                 color="white"
                 onClick={() => {
                   if (chatInput.trim()) {
@@ -895,7 +896,7 @@ function App() {
                   }
                 }}
                 isDisabled={!chatInput.trim()}
-                _hover={{ bg: 'gray.700' }}
+                _hover={{ bg: '#374151' }}
                 fontWeight="600"
                 px={6}
               >
