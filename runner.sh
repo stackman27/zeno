@@ -99,10 +99,10 @@ fi
   export WATCHPACK_POLLING_INTERVAL=300
 
  
-export WDS_SOCKET_HOST=localhost
-export WDS_SOCKET_PORT=$PORT
-export WDS_SOCKET_PATH=/sockjs-node
-
+  unset WDS_SOCKET_HOST
+  unset WDS_SOCKET_PATH
+  export WDS_SOCKET_PORT=0
+ 
   export FAST_REFRESH=true
 
   # Disable ESLint and treat warnings as non-fatal
