@@ -7,10 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN useradd -m runner
 
-# Create a venv for runner tooling (pytest/ruff/build)
+# Create a venv for runner tooling (pytest/ruff/build/aider)
 RUN python3 -m venv /opt/venv \
   && /opt/venv/bin/pip install --no-cache-dir -U pip \
-  && /opt/venv/bin/pip install --no-cache-dir pytest ruff build \
+  && /opt/venv/bin/pip install --no-cache-dir pytest ruff build aider-chat \
   && chmod -R a+rX /opt/venv
 
 ENV PATH="/opt/venv/bin:${PATH}"

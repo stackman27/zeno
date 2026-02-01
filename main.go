@@ -307,6 +307,12 @@ func RunRepo(
 	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
 		extraEnv["OPENAI_API_KEY"] = v
 	}
+	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
+		extraEnv["ANTHROPIC_API_KEY"] = v
+	}
+	if v := os.Getenv("GEMINI_API_KEY"); v != "" {
+		extraEnv["GEMINI_API_KEY"] = v
+	}
 
 	exitCode, runErr := RunDockerWorkflow(
 		ctx, image, repoDir, onLog,
