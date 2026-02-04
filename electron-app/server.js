@@ -188,6 +188,6 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🚀 Zeno web server running!`);
-  console.log(`   Open in browser: http://localhost:${PORT}\n`);
+  console.log(`🚀 Zeno web server running!`);
+  console.log(`   Open in browser: http://localhost:${PORT}`);
 });

@@ -37,7 +37,9 @@ import {
   ModalCloseButton,
   useDisclosure,
   Spinner,
-  Center
+  Center,
+  Tooltip,
+  Textarea
 } from '@chakra-ui/react';
 import { ChevronRightIcon, CloseIcon, DeleteIcon, RepeatIcon, ExternalLinkIcon, ChatIcon, ChevronLeftIcon, InfoIcon, ArrowUpIcon, ArrowDownIcon, CheckIcon, TimeIcon, StarIcon, AddIcon } from '@chakra-ui/icons';
 
@@ -114,6 +116,7 @@ function App() {
   const [selectedRepo, setSelectedRepo] = useState(null);
   const [availableRepos, setAvailableRepos] = useState([]);
   const [aiAgentMessages, setAiAgentMessages] = useState([]);
+  const rawOutputRef = useRef('');
   const [postIndices, setPostIndices] = useState({
     reddit: 0,
     twitter: 0,
@@ -132,6 +135,17 @@ function App() {
   const [selectedProduct, setSelectedProduct] = useState('pmai'); // 'pmai' or 'chatbuddy'
   const [weakSignalMode, setWeakSignalMode] = useState(false);
   const [productInsightsLoading, setProductInsightsLoading] = useState(false);
+  const [morningBriefIndex, setMorningBriefIndex] = useState(0);
+  const morningBriefDays = [
+    { date: 'Today', days: ['Today'] },
+    { date: 'Yesterday', days: ['Yesterday'] },
+    { date: '2 days ago', days: ['2 days ago'] },
+    { date: '3 days ago', days: ['3 days ago'] },
+    { date: '4-5 days ago', days: ['4 days ago', '5 days ago'] },
+    { date: '6-7 days ago', days: ['6 days ago', '7 days ago'] }
+  ];
+  const [envContent, setEnvContent] = useState('');
+  const { isOpen: isEnvModalOpen, onOpen: onEnvModalOpen, onClose: onEnvModalClose } = useDisclosure();
 
   // Simulate loading when Product Insights tab is opened or product is switched
   useEffect(() => {
@@ -553,6 +567,129 @@ function App() {
   const browserViewRef = useRef(null);
   const toast = useToast();
 
+  // Transform raw output into simple status messages (abstracts away verbose logs)
+  const formatOutput = (rawText) => {
+    const statusMessages = [];
+    const seen = new Set();
+    
+    const addStatus = (message) => {
+      if (!seen.has(message)) {
+        seen.add(message);
+        statusMessages.push(message);
+      }
+    };
+    
+    // Step 1: Cloning repository
+    if (rawText.match(/\[stderr\]\s*Cloning into/)) {
+      addStatus('📦 Cloning repository...');
+    }
+    if (rawText.match(/\[stdout\]\s*Your branch is up to date/)) {
+      addStatus('✓ Repository ready');
+    }
+    if (rawText.match(/\[warn\]\s*repo has local changes/)) {
+      addStatus('⚠️ Using local changes');
+    }
+    if (rawText.match(/\[stderr\]\s*Already on/)) {
+      addStatus('✓ Repository checked out');
+    }
+    
+    // Step 2: Detecting project type
+    const typeMatch = rawText.match(/\[info\]\s*detected project type:\s*(\w+)/);
+    if (typeMatch) {
+      const typeNames = {
+        'electron': 'Electron app',
+        'polyglot': 'Polyglot (Python + React)',
+        'python': 'Python project',
+        'node': 'Node.js project',
+        'unknown': 'Unknown project type'
+      };
+      addStatus(`🔍 Detected: ${typeNames[typeMatch[1]] || typeMatch[1]}`);
+    }
+    
+    // Step 3: Building Docker image
+    if (rawText.match(/\[info\]\s*building runner image/)) {
+      addStatus('🐳 Building Docker image...');
+    }
+    if (rawText.match(/\[stderr\]\s*#\d+\s+\[internal\]\s*load build definition/)) {
+      addStatus('   Loading Dockerfile...');
+    }
+    if (rawText.match(/\[stderr\]\s*#\d+\s+\[internal\]\s*load metadata/)) {
+      addStatus('   Fetching base image...');
+    }
+    if (rawText.match(/\[stderr\]\s*#\d+\s+\[.*\]\s*RUN.*apt-get update/)) {
+      addStatus('   Installing system packages...');
+    }
+    // Docker build complete - look for the final DONE message
+    if (rawText.match(/\[stderr\]\s*#\d+\s+\[.*\]\s*DONE\s+[\d.]+\s*$/m)) {
+      addStatus('✓ Docker image ready');
+    }
+    
+    // Step 4: Installing dependencies
+    if (rawText.match(/\[stdout\]\s*npm install/)) {
+      addStatus('📦 Installing dependencies...');
+    }
+    if (rawText.match(/\[stdout\]\s*added \d+ packages/)) {
+      addStatus('   Installing npm packages...');
+    }
+    if (rawText.match(/\[stdout\]\s*audited \d+ packages/)) {
+      addStatus('✓ Dependencies installed');
+    }
+    if (rawText.match(/\[stdout\]\s*pip install/)) {
+      addStatus('   Installing Python packages...');
+    }
+    if (rawText.match(/\[stdout\]\s*Requirement already satisfied/)) {
+      addStatus('   Python packages ready');
+    }
+    if (rawText.match(/\[stdout\]\s*Successfully installed/)) {
+      addStatus('✓ Python packages installed');
+    }
+    
+    // Step 5: Starting application
+    if (rawText.match(/\[stdout\]\s*Starting backend/)) {
+      addStatus('🚀 Starting application...');
+    }
+    if (rawText.match(/\[stdout\]\s*Starting frontend/)) {
+      addStatus('   Starting frontend server...');
+    }
+    if (rawText.match(/\[stdout\]\s*Backend.*running/)) {
+      addStatus('✓ Backend server ready');
+    }
+    if (rawText.match(/\[stdout\]\s*Frontend.*running/)) {
+      addStatus('✓ Frontend server ready');
+    }
+    if (rawText.match(/\[stdout\]\s*Compiled successfully/)) {
+      addStatus('✓ Frontend compiled');
+    }
+    if (rawText.match(/\[stdout\]\s*webpack compiled/)) {
+      addStatus('✓ Bundles built');
+    }
+    if (rawText.match(/\[stdout\]\s*Local:\s*http/)) {
+      addStatus('✓ Development server ready');
+    }
+    if (rawText.match(/\[stdout\]\s*Compiling/)) {
+      addStatus('   Compiling frontend...');
+    }
+    if (rawText.match(/\[stdout\]\s*Starting the development server/)) {
+      addStatus('   Starting development server...');
+    }
+    
+    // Final status - URLs
+    const uiMatch = rawText.match(/\[info\]\s*UI:\s*(http:\/\/localhost:\d+)/);
+    if (uiMatch) {
+      setDetectedUrls(prev => ({ ...prev, ui: uiMatch[1] }));
+      addStatus(`✅ Ready at: ${uiMatch[1]}`);
+    }
+    
+    const apiMatch = rawText.match(/\[info\]\s*API:\s*(http:\/\/localhost:\d+)/);
+    if (apiMatch) {
+      setDetectedUrls(prev => ({ ...prev, api: apiMatch[1] }));
+      addStatus(`✅ API at: ${apiMatch[1]}`);
+    }
+    
+    // Return status messages in order
+    return statusMessages.join('\n');
+  };
+
   useEffect(() => {
     // Ensure electronAPI is available (wait for it if needed)
     const setupOutputListener = () => {
@@ -560,7 +697,11 @@ function App() {
         // Set up output listener
         window.electronAPI.onZenoOutput((data) => {
           const text = data.data;
-          setOutput(prev => prev + text);
+          rawOutputRef.current += text;
+          
+          // Format the entire accumulated output to get proper step progression
+          const formatted = formatOutput(rawOutputRef.current);
+          setOutput(formatted);
           parseUrlsFromOutput(text);
         });
       } else {
@@ -573,6 +714,7 @@ function App() {
 
     return () => {
       window.electronAPI?.removeZenoOutputListener();
+      rawOutputRef.current = '';
     };
   }, []);
 
@@ -623,7 +765,14 @@ function App() {
   };
 
   const handleToggleChat = () => {
-    setChatOpen(!chatOpen);
+    // Only open, don't toggle - it stays open until explicitly closed
+    if (!chatOpen) {
+      setChatOpen(true);
+    }
+  };
+
+  const handleCloseChat = () => {
+    setChatOpen(false);
   };
 
   const handleSubmit = async (e) => {
@@ -631,7 +780,8 @@ function App() {
     
     if (isRunning) return;
 
-    setOutput('');
+    rawOutputRef.current = '';
+    setOutput('🚀 Starting workflow...\n');
     setDetectedUrls({ ui: null, api: null });
     setIsRunning(true);
 
@@ -723,6 +873,90 @@ function App() {
     }
   };
 
+  const handlePushToGitHubPR = async () => {
+    if (!githubConnected) {
+      toast({
+        title: 'GitHub not connected',
+        description: 'Please connect to GitHub first.',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    // Get repo directory - default to chat-buddy
+    // Try to get from formData first, then from selectedRepo, then default to chat-buddy
+    let repoDir = formData.dir;
+    
+    if (!repoDir && selectedRepo) {
+      repoDir = `repos/${selectedRepo.name}`;
+    }
+    
+    // Default to chat-buddy repository as specified
+    if (!repoDir) {
+      repoDir = 'repos/chat-buddy';
+    }
+
+    try {
+      toast({
+        title: 'Creating PR...',
+        description: 'Pushing changes to GitHub and creating pull request.',
+        status: 'info',
+        duration: 2000,
+        isClosable: true,
+      });
+
+      const result = await window.electronAPI.pushToGitHubPR({
+        repoDir: repoDir,
+        prTitle: `Zeno: Automated changes - ${new Date().toLocaleDateString()}`,
+        prBody: `This PR contains automated changes generated by Zeno.\n\n**Created:** ${new Date().toISOString()}\n**Service:** ${selectedUrl}`,
+        commitMessage: `Zeno: Automated changes from ${new Date().toISOString()}`
+      });
+
+      if (result.success) {
+        toast({
+          title: 'PR Created Successfully!',
+          description: `Pull request created: ${result.branchName}`,
+          status: 'success',
+          duration: 5000,
+          isClosable: true,
+        });
+        
+        // Open PR in browser
+        if (result.prUrl) {
+          setTimeout(() => {
+            window.electronAPI.openExternal(result.prUrl);
+          }, 1000);
+        }
+      } else {
+        toast({
+          title: 'Failed to create PR',
+          description: result.error || 'Unknown error occurred',
+          status: 'error',
+          duration: 5000,
+          isClosable: true,
+        });
+      }
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to create PR',
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
+    }
+  };
+
+  const handleInjectEnv = async () => {
+    // TODO: Implement .env injection functionality - save to local computer root
+    console.log('Inject .env:', envContent);
+    // Close modal after saving
+    onEnvModalClose();
+    setEnvContent('');
+  };
+
   useEffect(() => {
     // Auto-select UI when detected
     if (detectedUrls.ui && !selectedUrl) {
@@ -730,104 +964,170 @@ function App() {
     }
   }, [detectedUrls.ui, selectedUrl]);
 
+  // Close chat when switching away from Sandbox tab
+  useEffect(() => {
+    if (activeTab !== 1 && chatOpen) {
+      setChatOpen(false);
+    }
+  }, [activeTab]);
+
   return (
     <ChakraProvider theme={theme}>
       <Box minH="100vh" bg="#f9fafb" color="gray.800" position="relative" overflow="hidden">
-        {/* Header - Dark header */}
-        <Box
-          bg="#1f2937"
-          borderBottom="1px solid"
-          borderColor="#374151"
-          py={4}
-          px={8}
-        >
-          <Container maxW="container.xl">
-            <Flex align="center" justify="space-between">
-              <Flex align="center" gap={3}>
-                <Box
-                  w={9}
-                  h={9}
-                  bg="#4b5563"
-                  borderRadius="3px"
-                  display="flex"
-                  alignItems="center"
-                  justifyContent="center"
-                  fontSize="lg"
-                  fontWeight="700"
-                  color="white"
-                >
-                  Z
-                </Box>
-                <Box>
-                  <Heading size="md" color="#f3f4f6" fontWeight="700" letterSpacing="-0.2px">
-                    Zeno
-                  </Heading>
-                </Box>
-              </Flex>
-              <Text color="#9ca3af" fontSize="sm" fontWeight="500">
-                Docker Runner
-              </Text>
-            </Flex>
-          </Container>
-        </Box>
-
-        {/* Tabs - Dark tabs bar */}
+        {/* Header - Dark header with logo, tabs, and status */}
         <Tabs index={activeTab} onChange={setActiveTab} colorScheme="gray" isLazy>
-          <Box bg="#374151" borderBottom="1px solid" borderColor="#4b5563">
-            <Container maxW="container.xl" px={8}>
-              <TabList borderBottom="none" gap={1}>
-                <Tab
-                  fontWeight="500"
-                  color="#d1d5db"
-                  fontSize="sm"
-                  px={4}
-                  py={3}
-                  mb="-1px"
-                  borderBottom="2px solid transparent"
-                  _selected={{ 
-                    color: '#f9fafb', 
-                    borderBottomColor: '#60a5fa',
-                    fontWeight: '600'
-                  }}
-                  _hover={{ color: '#e5e7eb' }}
-                >
-                  Control Panel
-                </Tab>
-                <Tab
-                  fontWeight="500"
-                  color="#d1d5db"
-                  fontSize="sm"
-                  px={4}
-                  py={3}
-                  mb="-1px"
-                  borderBottom="2px solid transparent"
-                  _selected={{ 
-                    color: '#f9fafb', 
-                    borderBottomColor: '#60a5fa',
-                    fontWeight: '600'
-                  }}
-                  _hover={{ color: '#e5e7eb' }}
-                >
-                  Browser
-                </Tab>
-                <Tab
-                  fontWeight="500"
-                  color="#d1d5db"
-                  fontSize="sm"
-                  px={4}
-                  py={3}
-                  mb="-1px"
-                  borderBottom="2px solid transparent"
-                  _selected={{ 
-                    color: '#f9fafb', 
-                    borderBottomColor: '#60a5fa',
-                    fontWeight: '600'
-                  }}
-                  _hover={{ color: '#e5e7eb' }}
-                >
-                  Product Insights
-                </Tab>
-              </TabList>
+          <Box
+            bg="#1f2937"
+            borderBottom="1px solid"
+            borderColor="#374151"
+            py={3}
+            px={8}
+          >
+            <Container maxW="container.xl">
+              <Flex align="center" justify="space-between" gap={6}>
+                {/* Logo and name on left */}
+                <Flex align="center" gap={3} flexShrink={0}>
+                  <Box
+                    w={9}
+                    h={9}
+                    bg="#4b5563"
+                    borderRadius="3px"
+                    display="flex"
+                    alignItems="center"
+                    justifyContent="center"
+                    fontSize="lg"
+                    fontWeight="700"
+                    color="white"
+                  >
+                    Z
+                  </Box>
+                  <Box>
+                    <Heading size="md" color="#f3f4f6" fontWeight="700" letterSpacing="-0.2px">
+                      Zeno
+                    </Heading>
+                  </Box>
+                </Flex>
+
+                {/* Tabs in the middle */}
+                <Box flex={1} display="flex" justifyContent="center">
+                  <TabList borderBottom="none" gap={1}>
+                <Tooltip label="Run the product" placement="bottom" hasArrow>
+                  <Tab
+                    fontWeight="500"
+                    color="#d1d5db"
+                    fontSize="sm"
+                    px={4}
+                    py={3}
+                    mb="-1px"
+                    borderBottom="2px solid transparent"
+                    _selected={{ 
+                      color: '#f9fafb', 
+                      borderBottomColor: '#60a5fa',
+                      fontWeight: '600'
+                    }}
+                    _hover={{ color: '#e5e7eb' }}
+                  >
+                    <HStack spacing={2}>
+                      <Box
+                        as="svg"
+                        w={4}
+                        h={4}
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
+                      >
+                        <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
+                      </Box>
+                      <Text>Projects</Text>
+                    </HStack>
+                  </Tab>
+                </Tooltip>
+                <Tooltip label="Change + verify" placement="bottom" hasArrow>
+                  <Tab
+                    fontWeight="500"
+                    color="#d1d5db"
+                    fontSize="sm"
+                    px={4}
+                    py={3}
+                    mb="-1px"
+                    borderBottom="2px solid transparent"
+                    _selected={{ 
+                      color: '#f9fafb', 
+                      borderBottomColor: '#60a5fa',
+                      fontWeight: '600'
+                    }}
+                    _hover={{ color: '#e5e7eb' }}
+                  >
+                    <HStack spacing={2}>
+                      <Box
+                        as="svg"
+                        w={4}
+                        h={4}
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
+                      >
+                        <path fillRule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd"/>
+                      </Box>
+                      <Text>Sandbox</Text>
+                    </HStack>
+                  </Tab>
+                </Tooltip>
+                <Tooltip label="Measure + decide" placement="bottom" hasArrow>
+                  <Tab
+                    fontWeight="500"
+                    color="#d1d5db"
+                    fontSize="sm"
+                    px={4}
+                    py={3}
+                    mb="-1px"
+                    borderBottom="2px solid transparent"
+                    _selected={{ 
+                      color: '#f9fafb', 
+                      borderBottomColor: '#60a5fa',
+                      fontWeight: '600'
+                    }}
+                    _hover={{ color: '#e5e7eb' }}
+                  >
+                    <HStack spacing={2}>
+                      <Box
+                        as="svg"
+                        w={4}
+                        h={4}
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
+                      >
+                        <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"/>
+                      </Box>
+                      <Text>Insights</Text>
+                    </HStack>
+                  </Tab>
+                </Tooltip>
+                  </TabList>
+                </Box>
+
+                {/* GitHub status on right */}
+                <HStack spacing={3} align="center" flexShrink={0}>
+                  {githubConnected ? (
+                    <HStack spacing={2} align="center">
+                      <Text color="#f3f4f6" fontSize="sm" fontWeight="500">
+                        Zeno AI
+                      </Text>
+                      <Box
+                        as="svg"
+                        w={5}
+                        h={5}
+                        fill="#f3f4f6"
+                        viewBox="0 0 24 24"
+                      >
+                        <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                      </Box>
+                    </HStack>
+                  ) : (
+                    <Text color="#9ca3af" fontSize="sm" fontWeight="500">
+                      Connect Zeno AI to github
+                    </Text>
+                  )}
+                </HStack>
+              </Flex>
             </Container>
           </Box>
 
@@ -1170,6 +1470,35 @@ function App() {
                         </Select>
                       </FormControl>
 
+                      <FormControl>
+                        <FormLabel fontWeight="600" color="#374151" mb={2} fontSize="sm">
+                          Environment Variables
+                        </FormLabel>
+                        <Button
+                          type="button"
+                          size="md"
+                          width="100%"
+                          bg="#4b5563"
+                          color="white"
+                          onClick={onEnvModalOpen}
+                          fontWeight="600"
+                          _hover={{ bg: '#374151' }}
+                          leftIcon={
+                            <Box
+                              as="svg"
+                              w={4}
+                              h={4}
+                              fill="currentColor"
+                              viewBox="0 0 20 20"
+                            >
+                              <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd"/>
+                            </Box>
+                          }
+                        >
+                          Inject .env
+                        </Button>
+                      </FormControl>
+
                       <Box pt={4} borderTop="1px solid" borderColor="#e5e7eb">
                         <ButtonGroup spacing={3} width="100%">
                           <Button
@@ -1203,6 +1532,80 @@ function App() {
                   </Box>
                 </Grid>
 
+                {/* Inject .env Modal */}
+                <Modal isOpen={isEnvModalOpen} onClose={onEnvModalClose} size="lg">
+                  <ModalOverlay />
+                  <ModalContent>
+                    <ModalHeader>Inject Environment Variables</ModalHeader>
+                    <ModalCloseButton />
+                    <ModalBody>
+                      <VStack spacing={4} align="stretch">
+                        <Box
+                          bg="#fef3c7"
+                          border="1px solid"
+                          borderColor="#fbbf24"
+                          borderRadius="4px"
+                          p={3}
+                        >
+                          <Text fontSize="sm" color="#92400e" fontWeight="500" mb={1}>
+                            ℹ️ Local Storage Notice
+                          </Text>
+                          <Text fontSize="xs" color="#78350f" lineHeight="1.5">
+                            Environment variables will be stored locally on your computer. Zeno will only read the .env file from your local computer root directory.
+                          </Text>
+                        </Box>
+                        <FormControl>
+                          <FormLabel fontWeight="600" color="#374151" mb={2} fontSize="sm">
+                            Environment Variables (.env format)
+                          </FormLabel>
+                          <Textarea
+                            value={envContent}
+                            onChange={(e) => setEnvContent(e.target.value)}
+                            placeholder="API_KEY=your_key_here&#10;DATABASE_URL=your_url_here&#10;SECRET_KEY=your_secret_here"
+                            bg="#ffffff"
+                            borderColor="#d1d5db"
+                            borderWidth="1px"
+                            size="md"
+                            color="#111827"
+                            fontSize="14px"
+                            fontWeight="400"
+                            fontFamily="mono"
+                            minH="200px"
+                            _hover={{ borderColor: '#9ca3af', bg: '#f9fafb' }}
+                            _focus={{ borderColor: '#6b7280', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.1)', bg: '#ffffff' }}
+                            _placeholder={{ color: '#9ca3af', fontWeight: '400', opacity: 1 }}
+                          />
+                          <Text fontSize="xs" color="#6b7280" mt={2}>
+                            Enter environment variables in KEY=VALUE format, one per line
+                          </Text>
+                        </FormControl>
+                      </VStack>
+                    </ModalBody>
+                    <ModalFooter>
+                      <ButtonGroup spacing={3}>
+                        <Button
+                          variant="ghost"
+                          onClick={onEnvModalClose}
+                          fontWeight="600"
+                          color="gray.500"
+                          _hover={{ bg: '#e8e9ea', color: 'gray.700' }}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          bg="#4b5563"
+                          color="white"
+                          onClick={handleInjectEnv}
+                          fontWeight="600"
+                          _hover={{ bg: '#374151' }}
+                        >
+                          Save .env
+                        </Button>
+                      </ButtonGroup>
+                    </ModalFooter>
+                  </ModalContent>
+                </Modal>
+
                 {/* Output Section - Statsig-inspired */}
                 <Box 
                   bg="#fafbfb" 
@@ -1235,20 +1638,44 @@ function App() {
                   </Flex>
                   <Box
                     flex={1}
-                    bg="#1a1d23"
+                    bg="#ffffff"
                     borderRadius="3px"
-                    p={5}
+                    p={6}
                     overflowY="auto"
-                    fontFamily="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace"
-                    fontSize="13px"
                     border="1px solid"
-                    borderColor="#2a2d33"
-                    lineHeight="1.6"
-                    fontWeight="400"
+                    borderColor="#e5e7eb"
+                    lineHeight="1.8"
                   >
-                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordWrap: 'break-word', color: '#e5e7eb' }}>
-                      {output || <Text color="#9ca3af">No output yet. Run a workflow to see logs here.</Text>}
-                    </pre>
+                    {output ? (
+                      <VStack align="stretch" spacing={3}>
+                        {output.split('\n').filter(line => line.trim()).map((line, idx) => (
+                          <HStack key={idx} align="flex-start" spacing={3}>
+                            <Box flexShrink={0} mt={0.5}>
+                              {line.includes('✓') && <Text color="#16a34a" fontSize="sm">✓</Text>}
+                              {line.includes('⚠️') && <Text color="#f59e0b" fontSize="sm">⚠️</Text>}
+                              {line.includes('❌') && <Text color="#dc2626" fontSize="sm">❌</Text>}
+                              {!line.includes('✓') && !line.includes('⚠️') && !line.includes('❌') && (
+                                <Text color="#6b7280" fontSize="sm">
+                                  {line.match(/^[📦🔍🐳🚀✅]/)?.[0] || '•'}
+                                </Text>
+                              )}
+                            </Box>
+                            <Text 
+                              color="#374151" 
+                              fontSize="sm" 
+                              fontWeight={line.includes('✅') ? '600' : '400'}
+                              flex={1}
+                            >
+                              {line.replace(/^[📦🔍🐳🚀✅⚠️❌✓]\s*/, '')}
+                            </Text>
+                          </HStack>
+                        ))}
+                      </VStack>
+                    ) : (
+                      <Text color="#9ca3af" fontSize="sm">
+                        No status yet. Run a workflow to see progress here.
+                      </Text>
+                    )}
                   </Box>
                 </Box>
               </Container>
@@ -1368,17 +1795,54 @@ function App() {
                       color="#d1d5db"
                       _hover={{ bg: '#4b5563', color: '#f3f4f6' }}
                     />
+                    <Button
+                      leftIcon={
+                        <Box
+                          as="svg"
+                          w={4}
+                          h={4}
+                          fill="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                        </Box>
+                      }
+                      onClick={handlePushToGitHubPR}
+                      isDisabled={!githubConnected}
+                      variant="ghost"
+                      size="sm"
+                      color="#d1d5db"
+                      fontWeight="500"
+                      fontSize="sm"
+                      _hover={{ bg: '#4b5563', color: '#f3f4f6' }}
+                    >
+                      Push to GitHub PR
+                    </Button>
                   </HStack>
                 </Box>
 
                 {/* Full Screen Browser View */}
-                <Box flex={1} bg="white" position="relative" minH={0}>
+                <Box 
+                  flex={1} 
+                  bg="white" 
+                  position="relative" 
+                  minH={0}
+                  overflow="hidden"
+                >
                   {selectedUrl ? (
-                    <webview
-                      ref={browserViewRef}
-                      src={selectedUrl}
-                      style={{ width: '100%', height: '100%' }}
-                    />
+                    <Box
+                      position="relative"
+                      w="100%"
+                      h="100%"
+                      transition="width 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
+                      width={chatOpen ? 'calc(100% - 400px)' : '100%'}
+                    >
+                      <webview
+                        ref={browserViewRef}
+                        src={selectedUrl}
+                        style={{ width: '100%', height: '100%' }}
+                      />
+                    </Box>
                   ) : (
                     <Box
                       w="100%"
@@ -1388,6 +1852,9 @@ function App() {
                       alignItems="center"
                       justifyContent="center"
                       bg="#f3f4f6"
+                      position="relative"
+                      transition="width 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
+                      width={chatOpen ? 'calc(100% - 400px)' : '100%'}
                     >
                       <Box
                         w={16}
@@ -1409,7 +1876,162 @@ function App() {
                       </Text>
                     </Box>
                   )}
+                  
+                  {/* AI Assistant Sidebar - Slides in from right, overlays both webview and empty state */}
+                  <Box
+                    position="absolute"
+                    right={chatOpen ? 0 : '-400px'}
+                    top="0"
+                    bottom="0"
+                    w="400px"
+                    bg="#ffffff"
+                    borderLeft="1px solid"
+                    borderColor="#e5e7eb"
+                    display="flex"
+                    flexDirection="column"
+                    zIndex={100}
+                    boxShadow="-2px 0 16px rgba(0, 0, 0, 0.1)"
+                    transition="right 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
+                    overflow="hidden"
+                  >
+                {/* Chat Header - Dark */}
+                <Box
+                  px={4}
+                  py={3}
+                  borderBottom="1px solid"
+                  borderColor="#4b5563"
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="space-between"
+                  bg="#374151"
+                  flexShrink={0}
+                >
+                  <HStack spacing={2}>
+                    <Text fontSize="md" color="#f3f4f6" fontWeight="600">
+                      AI Assistant
+                    </Text>
+                    {chatMessages.length > 0 && (
+                      <Badge
+                        bg="#4b5563"
+                        color="#d1d5db"
+                        px={2}
+                        py={0.5}
+                        borderRadius="3px"
+                        fontSize="xs"
+                        fontWeight="600"
+                      >
+                        {chatMessages.length}
+                      </Badge>
+                    )}
+                  </HStack>
+                  <IconButton
+                    icon={<CloseIcon />}
+                    onClick={handleCloseChat}
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Close chat"
+                    color="#d1d5db"
+                    _hover={{ bg: '#4b5563', color: '#f3f4f6' }}
+                  />
+                </Box>
 
+                {/* Chat Messages */}
+                <Box
+                  flex={1}
+                  overflowY="auto"
+                  p={6}
+                  display="flex"
+                  flexDirection="column"
+                  gap={4}
+                  bg="#f9fafb"
+                >
+                  {chatMessages.length === 0 ? (
+                    <Box textAlign="center" py={16}>
+                      <Text color="#6b7280" fontSize="md" fontWeight="500" mb={2}>
+                        Ask for changes to your application
+                      </Text>
+                      <Text color="#9ca3af" fontSize="sm">
+                        Type a message below to get started
+                      </Text>
+                    </Box>
+                  ) : (
+                    chatMessages.map((msg, idx) => (
+                      <Box
+                        key={idx}
+                        alignSelf={msg.role === 'user' ? 'flex-end' : 'flex-start'}
+                        maxW="85%"
+                      >
+                        <Box
+                          bg={msg.role === 'user' ? '#4b5563' : '#e5e7eb'}
+                          color={msg.role === 'user' ? 'white' : '#374151'}
+                          px={4}
+                          py={3}
+                          borderRadius="6px"
+                          fontSize="sm"
+                          lineHeight="1.6"
+                        >
+                          <Text>{msg.content}</Text>
+                        </Box>
+                      </Box>
+                    ))
+                  )}
+                </Box>
+
+                {/* Chat Input */}
+                <Box
+                  px={4}
+                  py={4}
+                  borderTop="1px solid"
+                  borderColor="#e5e7eb"
+                  bg="#ffffff"
+                  flexShrink={0}
+                >
+                  <HStack spacing={3}>
+                    <Input
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      placeholder="Ask for changes..."
+                      bg="#ffffff"
+                      borderColor="#d1d5db"
+                      borderWidth="1px"
+                      size="md"
+                      fontSize="14px"
+                      fontWeight="400"
+                      letterSpacing="-0.01em"
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter' && chatInput.trim()) {
+                          const newMessage = { role: 'user', content: chatInput };
+                          setChatMessages([...chatMessages, newMessage]);
+                          setChatInput('');
+                          // TODO: Send to AI and get response
+                        }
+                      }}
+                      _hover={{ borderColor: '#9ca3af', bg: '#f9fafb' }}
+                      _focus={{ borderColor: '#6b7280', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.1)', bg: '#ffffff' }}
+                      _placeholder={{ color: '#9ca3af', fontWeight: '400', opacity: 1 }}
+                    />
+                    <Button
+                      size="md"
+                      bg="#4b5563"
+                      color="white"
+                      onClick={() => {
+                        if (chatInput.trim()) {
+                          const newMessage = { role: 'user', content: chatInput };
+                          setChatMessages([...chatMessages, newMessage]);
+                          setChatInput('');
+                          // TODO: Send to AI and get response
+                        }
+                      }}
+                      isDisabled={!chatInput.trim()}
+                      _hover={{ bg: '#374151' }}
+                      fontWeight="600"
+                      px={6}
+                    >
+                      Send
+                    </Button>
+                  </HStack>
+                </Box>
+                  </Box>
                 </Box>
               </Box>
             </TabPanel>
@@ -1496,7 +2118,7 @@ function App() {
                         fontSize="xs"
                         fontWeight="700"
                       >
-                        Today
+                        {morningBriefDays[morningBriefIndex]?.date || 'Today'}
                       </Badge>
                     </HStack>
                     <HStack spacing={2}>
@@ -1505,1059 +2127,474 @@ function App() {
                       </Badge>
                     </HStack>
                   </HStack>
-                  <Grid templateColumns="repeat(auto-fit, minmax(280px, 1fr))" gap={4}>
-                    {/* Opportunity Card */}
-                    <Box
-                      bg="linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)"
-                      borderRadius="6px"
-                      p={5}
-                      border="2px solid"
-                      borderColor="#3b82f6"
-                      boxShadow="0 2px 8px 0 rgba(59, 130, 246, 0.15)"
-                      position="relative"
-                      overflow="hidden"
-                    >
-                      <HStack mb={3} spacing={2}>
-                        <Badge bg="#3b82f6" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">
-                          OPPORTUNITY
-                        </Badge>
-                        <Badge bg="#ffffff" color="#3b82f6" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
-                          Build
-                        </Badge>
-                      </HStack>
-                      <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
-                        {selectedProduct === 'pmai' ? 'Automated Sprint Planning' : 'Voice-to-Text Prompt Input'}
+                  <Box position="relative">
+                    <HStack spacing={2} mb={4} justify="flex-end">
+                      <IconButton
+                        icon={<ChevronLeftIcon />}
+                        onClick={() => setMorningBriefIndex(Math.max(0, morningBriefIndex - 1))}
+                        isDisabled={morningBriefIndex === 0}
+                        size="sm"
+                        variant="ghost"
+                        aria-label="Previous slide"
+                        color="#6b7280"
+                        _hover={{ bg: '#f3f4f6', color: '#111827' }}
+                      />
+                      <Text fontSize="xs" color="#6b7280" fontWeight="500">
+                        {morningBriefIndex + 1} / {morningBriefDays.length}
                       </Text>
-                      <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
-                        {selectedProduct === 'pmai' 
-                          ? '23 PMs mentioned needing automated sprint planning. High confidence (85%) based on 5+ sources.'
-                          : '12 users requested voice input for prompts. Strong signal from power users.'}
-                      </Text>
-                      <HStack spacing={2} fontSize="xs" color="#6b7280">
-                        <Text fontWeight="600" color="#3b82f6">Confidence: 85%</Text>
-                        <Text>•</Text>
-                        <Text>5 sources</Text>
-                      </HStack>
-                    </Box>
-
-                    {/* Competitor Move Card */}
-                    <Box
-                      bg="linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)"
-                      borderRadius="6px"
-                      p={5}
-                      border="2px solid"
-                      borderColor="#f59e0b"
-                      boxShadow="0 2px 8px 0 rgba(245, 158, 11, 0.15)"
-                      position="relative"
-                      overflow="hidden"
-                    >
-                      <HStack mb={3} spacing={2}>
-                        <Badge bg="#f59e0b" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">
-                          COMPETITOR
-                        </Badge>
-                        <Badge bg="#ffffff" color="#f59e0b" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
-                          Launched
-                        </Badge>
-                      </HStack>
-                      <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
-                        {selectedProduct === 'pmai' ? 'Asana: AI-Powered Planning' : 'ChatGPT: Custom Prompt Library'}
-                      </Text>
-                      <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
-                        {selectedProduct === 'pmai'
-                          ? 'Asana launched AI-powered sprint planning. Price: $15/user/month.'
-                          : 'ChatGPT added shared prompt library. Users migrating for collaboration features.'}
-                      </Text>
-                      <HStack spacing={2} fontSize="xs" color="#6b7280">
-                        <Text fontWeight="600" color="#f59e0b">2 hours ago</Text>
-                        <Text>•</Text>
-                        <Text>High impact</Text>
-                      </HStack>
-                    </Box>
-
-                    {/* Pain Spike Card */}
-                    <Box
-                      bg="linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)"
-                      borderRadius="6px"
-                      p={5}
-                      border="2px solid"
-                      borderColor="#ef4444"
-                      boxShadow="0 2px 8px 0 rgba(239, 68, 68, 0.15)"
-                      position="relative"
-                      overflow="hidden"
-                    >
-                      <HStack mb={3} spacing={2}>
-                        <Badge bg="#ef4444" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">
-                          PAIN SPIKE
-                        </Badge>
-                        <Badge bg="#ffffff" color="#ef4444" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
-                          Critical
-                        </Badge>
-                      </HStack>
-                      <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
-                        {selectedProduct === 'pmai' ? 'Sprint Planning Delays' : 'Context Loss in Long Conversations'}
-                      </Text>
-                      <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
-                        {selectedProduct === 'pmai'
-                          ? '18 reports of planning delays in last 24h. Affecting sprint velocity.'
-                          : '15 users reported losing context after 20+ messages. Severity: High.'}
-                      </Text>
-                      <HStack spacing={2} fontSize="xs" color="#6b7280">
-                        <Text fontWeight="600" color="#ef4444">+240% vs yesterday</Text>
-                        <Text>•</Text>
-                        <Text>Onboarding</Text>
-                      </HStack>
-                    </Box>
-
-                    {/* Roadmap Risk Card */}
-                    <Box
-                      bg="linear-gradient(135deg, #e9d5ff 0%, #ddd6fe 100%)"
-                      borderRadius="6px"
-                      p={5}
-                      border="2px solid"
-                      borderColor="#9333ea"
-                      boxShadow="0 2px 8px 0 rgba(147, 51, 234, 0.15)"
-                      position="relative"
-                      overflow="hidden"
-                    >
-                      <HStack mb={3} spacing={2}>
-                        <Badge bg="#9333ea" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">
-                          ROADMAP
-                        </Badge>
-                        <Badge bg="#ffffff" color="#9333ea" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
-                          Risk
-                        </Badge>
-                      </HStack>
-                      <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
-                        {selectedProduct === 'pmai' ? 'Q2 Feature Timeline' : 'Prompt Template Launch'}
-                      </Text>
-                      <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
-                        {selectedProduct === 'pmai'
-                          ? 'Competitor feature overlap detected. Consider accelerating Jira integration.'
-                          : 'User demand for templates up 60%. Consider moving launch date forward.'}
-                      </Text>
-                      <HStack spacing={2} fontSize="xs" color="#6b7280">
-                        <Text fontWeight="600" color="#9333ea">Timeline impact</Text>
-                        <Text>•</Text>
-                        <Text>Q2 2024</Text>
-                      </HStack>
-                    </Box>
-
-                    {/* Metric Moved Card */}
-                    <Box
-                      bg="linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)"
-                      borderRadius="6px"
-                      p={5}
-                      border="2px solid"
-                      borderColor="#10b981"
-                      boxShadow="0 2px 8px 0 rgba(16, 185, 129, 0.15)"
-                      position="relative"
-                      overflow="hidden"
-                    >
-                      <HStack mb={3} spacing={2}>
-                        <Badge bg="#10b981" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">
-                          METRIC
-                        </Badge>
-                        <Badge bg="#ffffff" color="#10b981" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
-                          +24%
-                        </Badge>
-                      </HStack>
-                      <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
-                        {selectedProduct === 'pmai' ? 'Daily Active Projects' : 'Daily Active Conversations'}
-                      </Text>
-                      <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
-                        {selectedProduct === 'pmai'
-                          ? 'DAU increased 24% week-over-week. Driven by new team integrations.'
-                          : 'Daily conversations up 24%. Prompt templates feature driving engagement.'}
-                      </Text>
-                      <HStack spacing={2} fontSize="xs" color="#6b7280">
-                        <Text fontWeight="600" color="#10b981">Week-over-week</Text>
-                        <Text>•</Text>
-                        <Text>12,456 → 15,432</Text>
-                      </HStack>
-                    </Box>
-                  </Grid>
-                </Box>
-
-                {/* Recent Feature Launched Traction */}
-                {selectedProduct === 'pmai' ? (
-                  <Box mb={10}>
-                    <HStack mb={5} spacing={2}>
-                      <Heading size="md" color="#111827" fontWeight="700" letterSpacing="-0.1px">
-                        Feature Performance
-                      </Heading>
-                      <Badge
-                        bg="#f3f4f6"
-                        color="#4b5563"
-                        px={2}
-                        py={0.5}
-                        borderRadius="3px"
-                        fontSize="xs"
-                        fontWeight="600"
-                      >
-                        3 active
-                      </Badge>
+                      <IconButton
+                        icon={<ChevronRightIcon />}
+                        onClick={() => setMorningBriefIndex(Math.min(morningBriefDays.length - 1, morningBriefIndex + 1))}
+                        isDisabled={morningBriefIndex === morningBriefDays.length - 1}
+                        size="sm"
+                        variant="ghost"
+                        aria-label="Next slide"
+                        color="#6b7280"
+                        _hover={{ bg: '#f3f4f6', color: '#111827' }}
+                      />
                     </HStack>
-                    <Grid templateColumns="repeat(auto-fit, minmax(320px, 1fr))" gap={5}>
-                      <Box
-                        bg="linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)"
-                        borderRadius="6px"
-                        p={6}
-                        border="1px solid"
-                        borderColor="#e5e7eb"
-                        boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
-                        position="relative"
-                        overflow="hidden"
-                        _hover={{ boxShadow: '0 4px 12px 0 rgba(0, 0, 0, 0.1)', transform: 'translateY(-2px)', transition: 'all 0.2s' }}
-                      >
-                        <Box
-                          position="absolute"
-                          top={0}
-                          right={0}
-                          w="120px"
-                          h="120px"
-                          bg="linear-gradient(135deg, #10b981 0%, #059669 100%)"
-                          opacity="0.05"
-                          borderRadius="0 0 0 100%"
-                        />
-                        <HStack mb={4} justify="space-between" align="flex-start">
-                          <Box flex={1}>
-                            <HStack mb={2} spacing={2}>
-                              <Box
-                                w={8}
-                                h={8}
-                                bg="linear-gradient(135deg, #10b981 0%, #059669 100%)"
-                                borderRadius="5px"
-                                display="flex"
-                                alignItems="center"
-                                justifyContent="center"
-                              >
-                                <CheckIcon w={4} h={4} color="white" />
-                              </Box>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">
-                                Automated Sprint Planning
-                              </Text>
-                            </HStack>
-                            <Text fontSize="xs" color="#6b7280" fontWeight="500" ml={10}>
-                              Launched 2 weeks ago
-                            </Text>
-                          </Box>
-                        </HStack>
-                        <VStack align="stretch" spacing={4} mt={5}>
-                          <Box>
-                            <HStack justify="space-between" mb={1}>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" textTransform="uppercase" letterSpacing="0.5px">
-                                Adoption Rate
-                              </Text>
-                              <HStack spacing={1}>
-                                <ArrowUpIcon w={3} h={3} color="#10b981" />
-                                <Text fontSize="xs" fontWeight="600" color="#10b981">+18%</Text>
-                              </HStack>
-                            </HStack>
-                            <HStack spacing={2} align="center">
-                              <Text fontSize="2xl" fontWeight="700" color="#111827">72%</Text>
-                              <Box flex={1} h={2} bg="#e5e7eb" borderRadius="full" overflow="hidden">
-                                <Box w="72%" h="100%" bg="linear-gradient(90deg, #10b981 0%, #059669 100%)" borderRadius="full" />
-                              </Box>
-                            </HStack>
-                          </Box>
-                          <HStack justify="space-between" pt={3} borderTop="1px solid" borderColor="#e5e7eb">
-                            <Box>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Active Projects</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">8,234</Text>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Satisfaction</Text>
-                              <HStack spacing={1} justify="flex-end">
-                                <StarIcon w={3} h={3} color="#fbbf24" />
-                                <Text fontSize="lg" fontWeight="700" color="#111827">4.8</Text>
-                              </HStack>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Time Saved</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">2.4k hrs</Text>
-                            </Box>
+                    {/* Today */}
+                    <Box display={morningBriefIndex === 0 ? 'block' : 'none'}>
+                      <Grid templateColumns="repeat(auto-fit, minmax(280px, 1fr))" gap={4}>
+                        <Box bg="linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#10b981" boxShadow="0 2px 8px 0 rgba(16, 185, 129, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#10b981" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">METRIC</Badge>
+                            <Badge bg="#ffffff" color="#10b981" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">+18%</Badge>
                           </HStack>
-                        </VStack>
-                      </Box>
-
-                      <Box
-                        bg="linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)"
-                        borderRadius="6px"
-                        p={6}
-                        border="1px solid"
-                        borderColor="#e5e7eb"
-                        boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
-                        position="relative"
-                        overflow="hidden"
-                        _hover={{ boxShadow: '0 4px 12px 0 rgba(0, 0, 0, 0.1)', transform: 'translateY(-2px)', transition: 'all 0.2s' }}
-                      >
-                        <Box
-                          position="absolute"
-                          top={0}
-                          right={0}
-                          w="120px"
-                          h="120px"
-                          bg="linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)"
-                          opacity="0.05"
-                          borderRadius="0 0 0 100%"
-                        />
-                        <HStack mb={4} justify="space-between" align="flex-start">
-                          <Box flex={1}>
-                            <HStack mb={2} spacing={2}>
-                              <Box
-                                w={8}
-                                h={8}
-                                bg="linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)"
-                                borderRadius="5px"
-                                display="flex"
-                                alignItems="center"
-                                justifyContent="center"
-                              >
-                                <CheckIcon w={4} h={4} color="white" />
-                              </Box>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">
-                                Risk Detection AI
-                              </Text>
-                            </HStack>
-                            <Text fontSize="xs" color="#6b7280" fontWeight="500" ml={10}>
-                              Launched 1 month ago
-                            </Text>
-                          </Box>
-                        </HStack>
-                        <VStack align="stretch" spacing={4} mt={5}>
-                          <Box>
-                            <HStack justify="space-between" mb={1}>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" textTransform="uppercase" letterSpacing="0.5px">
-                                Adoption Rate
-                              </Text>
-                              <HStack spacing={1}>
-                                <ArrowUpIcon w={3} h={3} color="#10b981" />
-                                <Text fontSize="xs" fontWeight="600" color="#10b981">+15%</Text>
-                              </HStack>
-                            </HStack>
-                            <HStack spacing={2} align="center">
-                              <Text fontSize="2xl" fontWeight="700" color="#111827">85%</Text>
-                              <Box flex={1} h={2} bg="#e5e7eb" borderRadius="full" overflow="hidden">
-                                <Box w="85%" h="100%" bg="linear-gradient(90deg, #3b82f6 0%, #2563eb 100%)" borderRadius="full" />
-                              </Box>
-                            </HStack>
-                          </Box>
-                          <HStack justify="space-between" pt={3} borderTop="1px solid" borderColor="#e5e7eb">
-                            <Box>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Active Projects</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">12,456</Text>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Satisfaction</Text>
-                              <HStack spacing={1} justify="flex-end">
-                                <StarIcon w={3} h={3} color="#fbbf24" />
-                                <Text fontSize="lg" fontWeight="700" color="#111827">4.9</Text>
-                              </HStack>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Risks Detected</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">5.8k</Text>
-                            </Box>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'New Projects Created' : 'Active Conversations'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? '234 new projects created today. 18% increase from yesterday. Strong adoption from enterprise teams.'
+                              : '1,892 active conversations today. 18% growth driven by new prompt templates feature.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#10b981">Today</Text>
+                            <Text>•</Text>
+                            <Text>234 → 276</Text>
                           </HStack>
-                        </VStack>
-                      </Box>
-
-                      <Box
-                        bg="linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)"
-                        borderRadius="6px"
-                        p={6}
-                        border="1px solid"
-                        borderColor="#e5e7eb"
-                        boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
-                        position="relative"
-                        overflow="hidden"
-                        _hover={{ boxShadow: '0 4px 12px 0 rgba(0, 0, 0, 0.1)', transform: 'translateY(-2px)', transition: 'all 0.2s' }}
-                      >
-                        <Box
-                          position="absolute"
-                          top={0}
-                          right={0}
-                          w="120px"
-                          h="120px"
-                          bg="linear-gradient(135deg, #f59e0b 0%, #d97706 100%)"
-                          opacity="0.05"
-                          borderRadius="0 0 0 100%"
-                        />
-                        <HStack mb={4} justify="space-between" align="flex-start">
-                          <Box flex={1}>
-                            <HStack mb={2} spacing={2}>
-                              <Box
-                                w={8}
-                                h={8}
-                                bg="linear-gradient(135deg, #f59e0b 0%, #d97706 100%)"
-                                borderRadius="5px"
-                                display="flex"
-                                alignItems="center"
-                                justifyContent="center"
-                              >
-                                <CheckIcon w={4} h={4} color="white" />
-                              </Box>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">
-                                Bridge Aggregator
-                              </Text>
-                            </HStack>
-                            <Text fontSize="xs" color="#6b7280" fontWeight="500" ml={10}>
-                              Launched 3 weeks ago
-                            </Text>
-                          </Box>
-                        </HStack>
-                        <VStack align="stretch" spacing={4} mt={5}>
-                          <Box>
-                            <HStack justify="space-between" mb={1}>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" textTransform="uppercase" letterSpacing="0.5px">
-                                Adoption Rate
-                              </Text>
-                              <HStack spacing={1}>
-                                <ArrowUpIcon w={3} h={3} color="#10b981" />
-                                <Text fontSize="xs" fontWeight="600" color="#10b981">+22%</Text>
-                              </HStack>
-                            </HStack>
-                            <HStack spacing={2} align="center">
-                              <Text fontSize="2xl" fontWeight="700" color="#111827">61%</Text>
-                              <Box flex={1} h={2} bg="#e5e7eb" borderRadius="full" overflow="hidden">
-                                <Box w="61%" h="100%" bg="linear-gradient(90deg, #f59e0b 0%, #d97706 100%)" borderRadius="full" />
-                              </Box>
-                            </HStack>
-                          </Box>
-                          <HStack justify="space-between" pt={3} borderTop="1px solid" borderColor="#e5e7eb">
-                            <Box>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Daily Transfers</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">5,892</Text>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Satisfaction</Text>
-                              <HStack spacing={1} justify="flex-end">
-                                <StarIcon w={3} h={3} color="#fbbf24" />
-                                <Text fontSize="lg" fontWeight="700" color="#111827">4.6</Text>
-                              </HStack>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>TVL</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">$1.9M</Text>
-                            </Box>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#ef4444" boxShadow="0 2px 8px 0 rgba(239, 68, 68, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#ef4444" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">ISSUE</Badge>
+                            <Badge bg="#ffffff" color="#ef4444" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Resolved</Badge>
                           </HStack>
-                        </VStack>
-                      </Box>
-                    </Grid>
-                  </Box>
-                ) : (
-                  <Box mb={10}>
-                    <HStack mb={5} spacing={2}>
-                      <Heading size="md" color="#111827" fontWeight="700" letterSpacing="-0.1px">
-                        Feature Performance
-                      </Heading>
-                      <Badge
-                        bg="#f3f4f6"
-                        color="#4b5563"
-                        px={2}
-                        py={0.5}
-                        borderRadius="3px"
-                        fontSize="xs"
-                        fontWeight="600"
-                      >
-                        3 active
-                      </Badge>
-                    </HStack>
-                    <Grid templateColumns="repeat(auto-fit, minmax(320px, 1fr))" gap={5}>
-                      <Box
-                        bg="linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)"
-                        borderRadius="6px"
-                        p={6}
-                        border="1px solid"
-                        borderColor="#e5e7eb"
-                        boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
-                        position="relative"
-                        overflow="hidden"
-                        _hover={{ boxShadow: '0 4px 12px 0 rgba(0, 0, 0, 0.1)', transform: 'translateY(-2px)', transition: 'all 0.2s' }}
-                      >
-                        <Box
-                          position="absolute"
-                          top={0}
-                          right={0}
-                          w="120px"
-                          h="120px"
-                          bg="linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
-                          opacity="0.05"
-                          borderRadius="0 0 0 100%"
-                        />
-                        <HStack mb={4} justify="space-between" align="flex-start">
-                          <Box flex={1}>
-                            <HStack mb={2} spacing={2}>
-                              <Box
-                                w={8}
-                                h={8}
-                                bg="linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
-                                borderRadius="5px"
-                                display="flex"
-                                alignItems="center"
-                                justifyContent="center"
-                              >
-                                <CheckIcon w={4} h={4} color="white" />
-                              </Box>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">
-                                Advanced Prompt Templates
-                              </Text>
-                            </HStack>
-                            <Text fontSize="xs" color="#6b7280" fontWeight="500" ml={10}>
-                              Launched 2 weeks ago
-                            </Text>
-                          </Box>
-                        </HStack>
-                        <VStack align="stretch" spacing={4} mt={5}>
-                          <Box>
-                            <HStack justify="space-between" mb={1}>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" textTransform="uppercase" letterSpacing="0.5px">
-                                Adoption Rate
-                              </Text>
-                              <HStack spacing={1}>
-                                <ArrowUpIcon w={3} h={3} color="#10b981" />
-                                <Text fontSize="xs" fontWeight="600" color="#10b981">+24%</Text>
-                              </HStack>
-                            </HStack>
-                            <HStack spacing={2} align="center">
-                              <Text fontSize="2xl" fontWeight="700" color="#111827">78%</Text>
-                              <Box flex={1} h={2} bg="#e5e7eb" borderRadius="full" overflow="hidden">
-                                <Box w="78%" h="100%" bg="linear-gradient(90deg, #667eea 0%, #764ba2 100%)" borderRadius="full" />
-                              </Box>
-                            </HStack>
-                          </Box>
-                          <HStack justify="space-between" pt={3} borderTop="1px solid" borderColor="#e5e7eb">
-                            <Box>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Daily Messages</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">12,456</Text>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Satisfaction</Text>
-                              <HStack spacing={1} justify="flex-end">
-                                <StarIcon w={3} h={3} color="#fbbf24" />
-                                <Text fontSize="lg" fontWeight="700" color="#111827">4.9</Text>
-                              </HStack>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Active Users</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">3.2k</Text>
-                            </Box>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'API Response Time Spike' : 'Context Memory Bug'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'API response time increased to 2.3s (avg 0.8s). Fixed at 3:42 PM. Root cause: database query optimization needed.'
+                              : 'Context loss reported by 12 users. Fixed at 2:15 PM. Patch deployed successfully.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#ef4444">Resolved today</Text>
+                            <Text>•</Text>
+                            <Text>12 users affected</Text>
                           </HStack>
-                        </VStack>
-                      </Box>
-
-                      <Box
-                        bg="linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)"
-                        borderRadius="6px"
-                        p={6}
-                        border="1px solid"
-                        borderColor="#e5e7eb"
-                        boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
-                        position="relative"
-                        overflow="hidden"
-                        _hover={{ boxShadow: '0 4px 12px 0 rgba(0, 0, 0, 0.1)', transform: 'translateY(-2px)', transition: 'all 0.2s' }}
-                      >
-                        <Box
-                          position="absolute"
-                          top={0}
-                          right={0}
-                          w="120px"
-                          h="120px"
-                          bg="linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)"
-                          opacity="0.05"
-                          borderRadius="0 0 0 100%"
-                        />
-                        <HStack mb={4} justify="space-between" align="flex-start">
-                          <Box flex={1}>
-                            <HStack mb={2} spacing={2}>
-                              <Box
-                                w={8}
-                                h={8}
-                                bg="linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)"
-                                borderRadius="5px"
-                                display="flex"
-                                alignItems="center"
-                                justifyContent="center"
-                              >
-                                <CheckIcon w={4} h={4} color="white" />
-                              </Box>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">
-                                Context Retention
-                              </Text>
-                            </HStack>
-                            <Text fontSize="xs" color="#6b7280" fontWeight="500" ml={10}>
-                              Launched 1 month ago
-                            </Text>
-                          </Box>
-                        </HStack>
-                        <VStack align="stretch" spacing={4} mt={5}>
-                          <Box>
-                            <HStack justify="space-between" mb={1}>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" textTransform="uppercase" letterSpacing="0.5px">
-                                Adoption Rate
-                              </Text>
-                              <HStack spacing={1}>
-                                <ArrowUpIcon w={3} h={3} color="#10b981" />
-                                <Text fontSize="xs" fontWeight="600" color="#10b981">+19%</Text>
-                              </HStack>
-                            </HStack>
-                            <HStack spacing={2} align="center">
-                              <Text fontSize="2xl" fontWeight="700" color="#111827">82%</Text>
-                              <Box flex={1} h={2} bg="#e5e7eb" borderRadius="full" overflow="hidden">
-                                <Box w="82%" h="100%" bg="linear-gradient(90deg, #3b82f6 0%, #2563eb 100%)" borderRadius="full" />
-                              </Box>
-                            </HStack>
-                          </Box>
-                          <HStack justify="space-between" pt={3} borderTop="1px solid" borderColor="#e5e7eb">
-                            <Box>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Daily Messages</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">18,234</Text>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Satisfaction</Text>
-                              <HStack spacing={1} justify="flex-end">
-                                <StarIcon w={3} h={3} color="#fbbf24" />
-                                <Text fontSize="lg" fontWeight="700" color="#111827">4.8</Text>
-                              </HStack>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Active Users</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">4.5k</Text>
-                            </Box>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#3b82f6" boxShadow="0 2px 8px 0 rgba(59, 130, 246, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#3b82f6" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">FEATURE</Badge>
+                            <Badge bg="#ffffff" color="#3b82f6" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Launched</Badge>
                           </HStack>
-                        </VStack>
-                      </Box>
-
-                      <Box
-                        bg="linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)"
-                        borderRadius="6px"
-                        p={6}
-                        border="1px solid"
-                        borderColor="#e5e7eb"
-                        boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
-                        position="relative"
-                        overflow="hidden"
-                        _hover={{ boxShadow: '0 4px 12px 0 rgba(0, 0, 0, 0.1)', transform: 'translateY(-2px)', transition: 'all 0.2s' }}
-                      >
-                        <Box
-                          position="absolute"
-                          top={0}
-                          right={0}
-                          w="120px"
-                          h="120px"
-                          bg="linear-gradient(135deg, #f59e0b 0%, #d97706 100%)"
-                          opacity="0.05"
-                          borderRadius="0 0 0 100%"
-                        />
-                        <HStack mb={4} justify="space-between" align="flex-start">
-                          <Box flex={1}>
-                            <HStack mb={2} spacing={2}>
-                              <Box
-                                w={8}
-                                h={8}
-                                bg="linear-gradient(135deg, #f59e0b 0%, #d97706 100%)"
-                                borderRadius="5px"
-                                display="flex"
-                                alignItems="center"
-                                justifyContent="center"
-                              >
-                                <CheckIcon w={4} h={4} color="white" />
-                              </Box>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">
-                                Custom System Prompts
-                              </Text>
-                            </HStack>
-                            <Text fontSize="xs" color="#6b7280" fontWeight="500" ml={10}>
-                              Launched 3 weeks ago
-                            </Text>
-                          </Box>
-                        </HStack>
-                        <VStack align="stretch" spacing={4} mt={5}>
-                          <Box>
-                            <HStack justify="space-between" mb={1}>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" textTransform="uppercase" letterSpacing="0.5px">
-                                Adoption Rate
-                              </Text>
-                              <HStack spacing={1}>
-                                <ArrowUpIcon w={3} h={3} color="#10b981" />
-                                <Text fontSize="xs" fontWeight="600" color="#10b981">+16%</Text>
-                              </HStack>
-                            </HStack>
-                            <HStack spacing={2} align="center">
-                              <Text fontSize="2xl" fontWeight="700" color="#111827">65%</Text>
-                              <Box flex={1} h={2} bg="#e5e7eb" borderRadius="full" overflow="hidden">
-                                <Box w="65%" h="100%" bg="linear-gradient(90deg, #f59e0b 0%, #d97706 100%)" borderRadius="full" />
-                              </Box>
-                            </HStack>
-                          </Box>
-                          <HStack justify="space-between" pt={3} borderTop="1px solid" borderColor="#e5e7eb">
-                            <Box>
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Daily Messages</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">9,123</Text>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Satisfaction</Text>
-                              <HStack spacing={1} justify="flex-end">
-                                <StarIcon w={3} h={3} color="#fbbf24" />
-                                <Text fontSize="lg" fontWeight="700" color="#111827">4.7</Text>
-                              </HStack>
-                            </Box>
-                            <Box textAlign="right">
-                              <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={1}>Active Users</Text>
-                              <Text fontSize="lg" fontWeight="700" color="#111827">2.8k</Text>
-                            </Box>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Smart Risk Alerts' : 'Voice Input Beta'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'AI-powered risk detection launched to 50 beta teams. Initial feedback: 4.6/5 stars.'
+                              : 'Voice-to-text input feature released to beta users. 89% positive feedback in first 6 hours.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#3b82f6">Launched today</Text>
+                            <Text>•</Text>
+                            <Text>50 teams</Text>
                           </HStack>
-                        </VStack>
-                      </Box>
-                    </Grid>
-                  </Box>
-                )}
-
-                {/* In-Flight Features Timeframe */}
-                <Box mb={10}>
-                  <HStack mb={5} spacing={2}>
-                    <Heading size="md" color="#111827" fontWeight="700" letterSpacing="-0.1px">
-                      Roadmap
-                    </Heading>
-                    <Badge
-                      bg="#f3f4f6"
-                      color="#4b5563"
-                      px={2}
-                      py={0.5}
-                      borderRadius="3px"
-                      fontSize="xs"
-                      fontWeight="600"
-                    >
-                      4 in progress
-                    </Badge>
-                  </HStack>
-                  <Box
-                    bg="#ffffff"
-                    borderRadius="6px"
-                    p={6}
-                    border="1px solid"
-                    borderColor="#e5e7eb"
-                    boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
-                  >
-                    <VStack align="stretch" spacing={5}>
-                      {/* Feature 1 */}
-                      <Box pb={5} borderBottom="1px solid" borderColor="#e5e7eb" _last={{ borderBottom: 'none', pb: 0 }}>
-                        <HStack mb={4} spacing={4} align="flex-start">
-                          <Box
-                            w={10}
-                            h={10}
-                            bg="linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)"
-                            borderRadius="6px"
-                            display="flex"
-                            alignItems="center"
-                            justifyContent="center"
-                            flexShrink={0}
-                          >
-                            <TimeIcon w={5} h={5} color="white" />
-                          </Box>
-                          <Box flex={1}>
-                            <HStack mb={2} spacing={2} flexWrap="wrap">
-                              <Text fontSize="lg" fontWeight="700" color="#111827">
-                                Project Health Dashboard
-                              </Text>
-                              <Badge
-                                bg="#dbeafe"
-                                color="#2563eb"
-                                px={2.5}
-                                py={1}
-                                borderRadius="4px"
-                                fontSize="xs"
-                                fontWeight="600"
-                              >
-                                In Development
-                              </Badge>
-                            </HStack>
-                            <Text fontSize="sm" color="#6b7280" mb={4} lineHeight="1.6">
-                              Real-time project metrics with velocity tracking, risk analytics, and automated health monitoring
-                            </Text>
-                            <Grid templateColumns="repeat(3, 1fr)" gap={4} mb={3}>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Start Date
-                                </Text>
-                                <Text fontSize="sm" fontWeight="600" color="#111827">Jan 15, 2024</Text>
-                              </Box>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Target Date
-                                </Text>
-                                <Text fontSize="sm" fontWeight="700" color="#2563eb">Mar 1, 2024</Text>
-                              </Box>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Progress
-                                </Text>
-                                <HStack spacing={2}>
-                                  <Text fontSize="sm" fontWeight="700" color="#111827">65%</Text>
-                                  <Box flex={1} h={1.5} bg="#e5e7eb" borderRadius="full" overflow="hidden">
-                                    <Box w="65%" h="100%" bg="linear-gradient(90deg, #3b82f6 0%, #2563eb 100%)" borderRadius="full" />
-                                  </Box>
-                                </HStack>
-                              </Box>
-                            </Grid>
-                          </Box>
-                        </HStack>
-                      </Box>
-
-                      {/* Feature 2 */}
-                      <Box pb={5} borderBottom="1px solid" borderColor="#e5e7eb" _last={{ borderBottom: 'none', pb: 0 }}>
-                        <HStack mb={4} spacing={4} align="flex-start">
-                          <Box
-                            w={10}
-                            h={10}
-                            bg="linear-gradient(135deg, #f59e0b 0%, #d97706 100%)"
-                            borderRadius="6px"
-                            display="flex"
-                            alignItems="center"
-                            justifyContent="center"
-                            flexShrink={0}
-                          >
-                            <TimeIcon w={5} h={5} color="white" />
-                          </Box>
-                          <Box flex={1}>
-                            <HStack mb={2} spacing={2} flexWrap="wrap">
-                              <Text fontSize="lg" fontWeight="700" color="#111827">
-                                Multi-Tool Integration
-                              </Text>
-                              <Badge
-                                bg="#fef3c7"
-                                color="#d97706"
-                                px={2.5}
-                                py={1}
-                                borderRadius="4px"
-                                fontSize="xs"
-                                fontWeight="600"
-                              >
-                                In Design
-                              </Badge>
-                            </HStack>
-                            <Text fontSize="sm" color="#6b7280" mb={4} lineHeight="1.6">
-                              Support for Jira, Asana, Linear, Monday.com, and custom tools with tool-specific AI configurations
-                            </Text>
-                            <Grid templateColumns="repeat(3, 1fr)" gap={4} mb={3}>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Start Date
-                                </Text>
-                                <Text fontSize="sm" fontWeight="600" color="#111827">Feb 1, 2024</Text>
-                              </Box>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Target Date
-                                </Text>
-                                <Text fontSize="sm" fontWeight="700" color="#d97706">Apr 15, 2024</Text>
-                              </Box>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Progress
-                                </Text>
-                                <HStack spacing={2}>
-                                  <Text fontSize="sm" fontWeight="700" color="#111827">25%</Text>
-                                  <Box flex={1} h={1.5} bg="#e5e7eb" borderRadius="full" overflow="hidden">
-                                    <Box w="25%" h="100%" bg="linear-gradient(90deg, #f59e0b 0%, #d97706 100%)" borderRadius="full" />
-                                  </Box>
-                                </HStack>
-                              </Box>
-                            </Grid>
-                          </Box>
-                        </HStack>
-                      </Box>
-
-                      {/* Feature 3 */}
-                      <Box pb={5} borderBottom="1px solid" borderColor="#e5e7eb" _last={{ borderBottom: 'none', pb: 0 }}>
-                        <HStack mb={4} spacing={4} align="flex-start">
-                          <Box
-                            w={10}
-                            h={10}
-                            bg="linear-gradient(135deg, #10b981 0%, #059669 100%)"
-                            borderRadius="6px"
-                            display="flex"
-                            alignItems="center"
-                            justifyContent="center"
-                            flexShrink={0}
-                          >
-                            <TimeIcon w={5} h={5} color="white" />
-                          </Box>
-                          <Box flex={1}>
-                            <HStack mb={2} spacing={2} flexWrap="wrap">
-                              <Text fontSize="lg" fontWeight="700" color="#111827">
-                                AI-Powered Dependency Analysis
-                              </Text>
-                              <Badge
-                                bg="#dcfce7"
-                                color="#16a34a"
-                                px={2.5}
-                                py={1}
-                                borderRadius="4px"
-                                fontSize="xs"
-                                fontWeight="600"
-                              >
-                                In Testing
-                              </Badge>
-                            </HStack>
-                            <Text fontSize="sm" color="#6b7280" mb={4} lineHeight="1.6">
-                              Intelligent dependency tracking with automated impact analysis and configurable risk thresholds
-                            </Text>
-                            <Grid templateColumns="repeat(3, 1fr)" gap={4} mb={3}>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Start Date
-                                </Text>
-                                <Text fontSize="sm" fontWeight="600" color="#111827">Jan 8, 2024</Text>
-                              </Box>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Target Date
-                                </Text>
-                                <Text fontSize="sm" fontWeight="700" color="#16a34a">Feb 20, 2024</Text>
-                              </Box>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Progress
-                                </Text>
-                                <HStack spacing={2}>
-                                  <Text fontSize="sm" fontWeight="700" color="#111827">85%</Text>
-                                  <Box flex={1} h={1.5} bg="#e5e7eb" borderRadius="full" overflow="hidden">
-                                    <Box w="85%" h="100%" bg="linear-gradient(90deg, #10b981 0%, #059669 100%)" borderRadius="full" />
-                                  </Box>
-                                </HStack>
-                              </Box>
-                            </Grid>
-                          </Box>
-                        </HStack>
-                      </Box>
-
-                      {/* Feature 4 */}
-                      <Box>
-                        <HStack mb={4} spacing={4} align="flex-start">
-                          <Box
-                            w={10}
-                            h={10}
-                            bg="linear-gradient(135deg, #9333ea 0%, #7e22ce 100%)"
-                            borderRadius="6px"
-                            display="flex"
-                            alignItems="center"
-                            justifyContent="center"
-                            flexShrink={0}
-                          >
-                            <TimeIcon w={5} h={5} color="white" />
-                          </Box>
-                          <Box flex={1}>
-                            <HStack mb={2} spacing={2} flexWrap="wrap">
-                              <Text fontSize="lg" fontWeight="700" color="#111827">
-                                Enterprise Team Management
-                              </Text>
-                              <Badge
-                                bg="#e9d5ff"
-                                color="#9333ea"
-                                px={2.5}
-                                py={1}
-                                borderRadius="4px"
-                                fontSize="xs"
-                                fontWeight="600"
-                              >
-                                Planned
-                              </Badge>
-                            </HStack>
-                            <Text fontSize="sm" color="#6b7280" mb={4} lineHeight="1.6">
-                              Enterprise-grade team management with unified AI insights across all projects and automated executive reporting
-                            </Text>
-                            <Grid templateColumns="repeat(3, 1fr)" gap={4} mb={3}>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Start Date
-                                </Text>
-                                <Text fontSize="sm" fontWeight="600" color="#111827">Mar 1, 2024</Text>
-                              </Box>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Target Date
-                                </Text>
-                                <Text fontSize="sm" fontWeight="700" color="#9333ea">May 15, 2024</Text>
-                              </Box>
-                              <Box>
-                                <Text fontSize="xs" color="#9ca3af" fontWeight="500" mb={1} textTransform="uppercase" letterSpacing="0.5px">
-                                  Progress
-                                </Text>
-                                <HStack spacing={2}>
-                                  <Text fontSize="sm" fontWeight="700" color="#111827">0%</Text>
-                                  <Box flex={1} h={1.5} bg="#e5e7eb" borderRadius="full" overflow="hidden">
-                                    <Box w="0%" h="100%" bg="linear-gradient(90deg, #9333ea 0%, #7e22ce 100%)" borderRadius="full" />
-                                  </Box>
-                                </HStack>
-                              </Box>
-                            </Grid>
-                          </Box>
-                        </HStack>
-                      </Box>
-                    </VStack>
+                        </Box>
+                      </Grid>
+                    </Box>
+                    {/* Yesterday */}
+                    <Box display={morningBriefIndex === 1 ? 'block' : 'none'}>
+                      <Grid templateColumns="repeat(auto-fit, minmax(280px, 1fr))" gap={4}>
+                        <Box bg="linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#10b981" boxShadow="0 2px 8px 0 rgba(16, 185, 129, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#10b981" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">GROWTH</Badge>
+                            <Badge bg="#ffffff" color="#10b981" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">+12%</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Weekly Active Teams' : 'Daily Active Users'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'Weekly active teams increased 12% yesterday. 156 new teams onboarded. Strong enterprise adoption.'
+                              : 'DAU grew 12% yesterday. 1,234 new users signed up. Prompt templates driving engagement.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#10b981">Yesterday</Text>
+                            <Text>•</Text>
+                            <Text>1,234 → 1,382</Text>
+                          </HStack>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#f59e0b" boxShadow="0 2px 8px 0 rgba(245, 158, 11, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#f59e0b" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">COMPETITOR</Badge>
+                            <Badge bg="#ffffff" color="#f59e0b" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Update</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Asana: New AI Features' : 'ChatGPT: Prompt Marketplace'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'Asana announced AI sprint planning features. Pricing: $12/user/month. 3 enterprise customers migrated.'
+                              : 'ChatGPT launched prompt marketplace. 45 users mentioned considering switch. Monitor closely.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#f59e0b">Yesterday</Text>
+                            <Text>•</Text>
+                            <Text>3 customers</Text>
+                          </HStack>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #e9d5ff 0%, #ddd6fe 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#9333ea" boxShadow="0 2px 8px 0 rgba(147, 51, 234, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#9333ea" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">TREND</Badge>
+                            <Badge bg="#ffffff" color="#9333ea" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Emerging</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Jira Integration Requests' : 'Multi-Agent Workflows'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? '28 requests for Jira integration yesterday. High priority from enterprise customers. Consider accelerating roadmap.'
+                              : '23 users exploring multi-agent setups. Strong signal from power users. Feature request trending.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#9333ea">Yesterday</Text>
+                            <Text>•</Text>
+                            <Text>28 requests</Text>
+                          </HStack>
+                        </Box>
+                      </Grid>
+                    </Box>
+                    {/* 2 days ago */}
+                    <Box display={morningBriefIndex === 2 ? 'block' : 'none'}>
+                      <Grid templateColumns="repeat(auto-fit, minmax(280px, 1fr))" gap={4}>
+                        <Box bg="linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#3b82f6" boxShadow="0 2px 8px 0 rgba(59, 130, 246, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#3b82f6" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">FEATURE</Badge>
+                            <Badge bg="#ffffff" color="#3b82f6" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Shipped</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Automated Sprint Planning' : 'Prompt Templates Library'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'AI-powered sprint planning feature shipped. 78% adoption in first 24h. User satisfaction: 4.6/5.'
+                              : 'Prompt templates library launched. 1,234 templates created by community. 89% positive feedback.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#3b82f6">2 days ago</Text>
+                            <Text>•</Text>
+                            <Text>78% adoption</Text>
+                          </HStack>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#ef4444" boxShadow="0 2px 8px 0 rgba(239, 68, 68, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#ef4444" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">ISSUE</Badge>
+                            <Badge bg="#ffffff" color="#ef4444" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Fixed</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Database Performance' : 'Memory Leak'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'Database query slowdown detected. Average response time: 1.8s. Fixed with query optimization. All systems stable.'
+                              : 'Memory leak in conversation handler. Fixed with garbage collection improvements. No user impact.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#ef4444">2 days ago</Text>
+                            <Text>•</Text>
+                            <Text>Fixed</Text>
+                          </HStack>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#10b981" boxShadow="0 2px 8px 0 rgba(16, 185, 129, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#10b981" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">METRIC</Badge>
+                            <Badge bg="#ffffff" color="#10b981" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">+15%</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'User Engagement' : 'Conversation Quality'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'User engagement up 15% from previous day. Average session time: 24 minutes. Feature adoption driving growth.'
+                              : 'Conversation quality score improved 15%. Average response relevance: 92%. New templates performing well.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#10b981">2 days ago</Text>
+                            <Text>•</Text>
+                            <Text>15% increase</Text>
+                          </HStack>
+                        </Box>
+                      </Grid>
+                    </Box>
+                    {/* 3 days ago */}
+                    <Box display={morningBriefIndex === 3 ? 'block' : 'none'}>
+                      <Grid templateColumns="repeat(auto-fit, minmax(280px, 1fr))" gap={4}>
+                        <Box bg="linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#3b82f6" boxShadow="0 2px 8px 0 rgba(59, 130, 246, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#3b82f6" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">OPPORTUNITY</Badge>
+                            <Badge bg="#ffffff" color="#3b82f6" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">High</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Enterprise Onboarding' : 'API Integration Requests'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? '3 enterprise customers signed up. Total ARR impact: $45k. Strong interest from Fortune 500 companies.'
+                              : '45 API integration requests. High demand for programmatic access. Consider prioritizing API v2 development.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#3b82f6">3 days ago</Text>
+                            <Text>•</Text>
+                            <Text>$45k ARR</Text>
+                          </HStack>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#f59e0b" boxShadow="0 2px 8px 0 rgba(245, 158, 11, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#f59e0b" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">ALERT</Badge>
+                            <Badge bg="#ffffff" color="#f59e0b" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Monitor</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Churn Risk Detected' : 'Usage Drop'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? '5 enterprise teams showing reduced activity. Engagement down 40%. Outreach campaign initiated. Monitor closely.'
+                              : 'Daily active users dropped 8% from previous day. Investigation ongoing. Possible seasonal variation.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#f59e0b">3 days ago</Text>
+                            <Text>•</Text>
+                            <Text>5 teams</Text>
+                          </HStack>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#10b981" boxShadow="0 2px 8px 0 rgba(16, 185, 129, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#10b981" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">SUCCESS</Badge>
+                            <Badge bg="#ffffff" color="#10b981" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Milestone</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? '10K Projects Milestone' : '100K Conversations'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'Reached 10,000 active projects milestone. 23% month-over-month growth. Strong product-market fit indicators.'
+                              : '100,000 total conversations milestone reached. Average conversation length: 8.5 messages. Strong engagement.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#10b981">3 days ago</Text>
+                            <Text>•</Text>
+                            <Text>Milestone</Text>
+                          </HStack>
+                        </Box>
+                      </Grid>
+                    </Box>
+                    {/* 4-5 days ago */}
+                    <Box display={morningBriefIndex === 4 ? 'block' : 'none'}>
+                      <Grid templateColumns="repeat(auto-fit, minmax(280px, 1fr))" gap={4}>
+                        <Box bg="linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#3b82f6" boxShadow="0 2px 8px 0 rgba(59, 130, 246, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#3b82f6" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">FEATURE</Badge>
+                            <Badge bg="#ffffff" color="#3b82f6" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Beta</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Risk Dashboard Beta' : 'Collaborative Editing'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'Risk dashboard entered beta testing. 12 teams participating. Initial feedback: 4.4/5 stars. Launch planned for next week.'
+                              : 'Real-time collaborative editing feature in beta. 8 teams testing. Positive feedback on performance and UX.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#3b82f6">4-5 days ago</Text>
+                            <Text>•</Text>
+                            <Text>12 teams</Text>
+                          </HStack>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #e9d5ff 0%, #ddd6fe 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#9333ea" boxShadow="0 2px 8px 0 rgba(147, 51, 234, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#9333ea" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">TREND</Badge>
+                            <Badge bg="#ffffff" color="#9333ea" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Growing</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Mobile App Usage' : 'Voice Feature Adoption'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'Mobile app usage increased 34% over 4-5 days. 456 daily active mobile users. Consider mobile-first features.'
+                              : 'Voice input feature adoption growing. 23% of new users trying voice. Strong signal for expansion.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#9333ea">4-5 days ago</Text>
+                            <Text>•</Text>
+                            <Text>+34%</Text>
+                          </HStack>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#ef4444" boxShadow="0 2px 8px 0 rgba(239, 68, 68, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#ef4444" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">ISSUE</Badge>
+                            <Badge bg="#ffffff" color="#ef4444" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Resolved</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Sync Delays' : 'Response Timeout'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'Data sync delays reported by 8 teams. Root cause: API rate limiting. Fixed with queue optimization. All systems stable.'
+                              : 'Response timeout issues affecting 15 users. Fixed with connection pooling improvements. No further incidents.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#ef4444">4-5 days ago</Text>
+                            <Text>•</Text>
+                            <Text>Resolved</Text>
+                          </HStack>
+                        </Box>
+                      </Grid>
+                    </Box>
+                    {/* 6-7 days ago */}
+                    <Box display={morningBriefIndex === 5 ? 'block' : 'none'}>
+                      <Grid templateColumns="repeat(auto-fit, minmax(280px, 1fr))" gap={4}>
+                        <Box bg="linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#10b981" boxShadow="0 2px 8px 0 rgba(16, 185, 129, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#10b981" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">GROWTH</Badge>
+                            <Badge bg="#ffffff" color="#10b981" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">+28%</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Weekly Signups' : 'New User Onboarding'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'Weekly new signups increased 28% compared to previous week. 234 new teams. Strong marketing campaign impact.'
+                              : 'New user onboarding up 28%. 1,456 new users. Improved onboarding flow showing positive results.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#10b981">6-7 days ago</Text>
+                            <Text>•</Text>
+                            <Text>+28%</Text>
+                          </HStack>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#3b82f6" boxShadow="0 2px 8px 0 rgba(59, 130, 246, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#3b82f6" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">FEATURE</Badge>
+                            <Badge bg="#ffffff" color="#3b82f6" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Launched</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Integration Hub' : 'Prompt Analytics'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'Integration hub launched with Jira, Slack, and Linear support. 45 teams connected in first week. User satisfaction: 4.7/5.'
+                              : 'Prompt analytics dashboard launched. Track performance, usage, and optimization opportunities. 234 active users.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#3b82f6">6-7 days ago</Text>
+                            <Text>•</Text>
+                            <Text>45 teams</Text>
+                          </HStack>
+                        </Box>
+                        <Box bg="linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)" borderRadius="6px" p={5} border="2px solid" borderColor="#f59e0b" boxShadow="0 2px 8px 0 rgba(245, 158, 11, 0.15)">
+                          <HStack mb={3} spacing={2}>
+                            <Badge bg="#f59e0b" color="white" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="700">ALERT</Badge>
+                            <Badge bg="#ffffff" color="#f59e0b" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">Monitor</Badge>
+                          </HStack>
+                          <Text fontSize="md" fontWeight="700" color="#111827" mb={2}>
+                            {selectedProduct === 'pmai' ? 'Support Ticket Spike' : 'Error Rate Increase'}
+                          </Text>
+                          <Text fontSize="sm" color="#4b5563" mb={3} lineHeight="1.6">
+                            {selectedProduct === 'pmai'
+                              ? 'Support tickets increased 45% week-over-week. Main issues: onboarding confusion and API documentation. Action items identified.'
+                              : 'Error rate increased to 2.3% (target: <1%). Investigation ongoing. Possible correlation with new feature rollout.'}
+                          </Text>
+                          <HStack spacing={2} fontSize="xs" color="#6b7280">
+                            <Text fontWeight="600" color="#f59e0b">6-7 days ago</Text>
+                            <Text>•</Text>
+                            <Text>+45%</Text>
+                          </HStack>
+                        </Box>
+                      </Grid>
+                    </Box>
                   </Box>
                 </Box>
 
-                {/* Opportunity Radar */}
+                {/* Shipped with Zeno AI */}
                 <Box mb={10}>
                   <HStack mb={5} spacing={2} justify="space-between">
                     <HStack spacing={2}>
                       <Heading size="md" color="#111827" fontWeight="700" letterSpacing="-0.1px">
-                        Opportunity Radar
+                        Shipped with Zeno AI
                       </Heading>
-                      <Badge bg="#f3f4f6" color="#4b5563" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
-                        What to build next
+                      <Badge bg="#dcfce7" color="#16a34a" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
+                        AI-Generated Features
                       </Badge>
                     </HStack>
-                    <Button
-                      size="sm"
-                      onClick={() => setWeakSignalMode(!weakSignalMode)}
-                      bg={weakSignalMode ? '#4b5563' : '#f3f4f6'}
-                      color={weakSignalMode ? 'white' : '#4b5563'}
-                      fontWeight="600"
-                      _hover={{ bg: weakSignalMode ? '#374151' : '#e5e7eb' }}
-                    >
-                      {weakSignalMode ? 'Standard View' : 'Weak-Signal Mode'}
-                    </Button>
                   </HStack>
                   <Grid templateColumns="repeat(auto-fit, minmax(350px, 1fr))" gap={5}>
                     <Box
                       bg="#ffffff"
                       borderRadius="6px"
                       p={6}
-                      border="2px solid"
-                      borderColor="#10b981"
+                      border="1px solid"
+                      borderColor="#e5e7eb"
                       boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
                     >
-                      <HStack mb={4} spacing={2}>
-                        <Badge bg="#dcfce7" color="#16a34a" px={3} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
-                          BUILD
-                        </Badge>
-                        <Badge bg="#f3f4f6" color="#4b5563" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
-                          Confidence: 92%
-                        </Badge>
+                      <HStack mb={4} spacing={2} justify="space-between">
+                        <HStack spacing={2}>
+                          <Badge bg="#dcfce7" color="#16a34a" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
+                            EXCEEDING
+                          </Badge>
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">
+                            Shipped 5 days ago
+                          </Text>
+                        </HStack>
                       </HStack>
-                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={3}>
-                        {selectedProduct === 'pmai' ? 'Jira Integration' : 'Prompt Version Control'}
+                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={2}>
+                        {selectedProduct === 'pmai' ? 'AI Sprint Planning Assistant' : 'Smart Prompt Suggestions'}
                       </Text>
                       <Text fontSize="sm" color="#4b5563" mb={4} lineHeight="1.7">
                         {selectedProduct === 'pmai'
-                          ? 'PMs requesting Jira integration for seamless workflow. 45 mentions across 8 sources. High specificity with detailed use cases.'
-                          : 'Developers need version control for prompts. 38 mentions, strong workaround signals (users using Git manually).'}
+                          ? 'Generated by Zeno AI based on user feedback. Automatically creates sprint plans with risk assessment.'
+                          : 'AI-powered prompt suggestions based on conversation context. Generated from community insights.'}
                       </Text>
-                      <VStack align="stretch" spacing={2} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
-                        <HStack justify="space-between" fontSize="xs">
-                          <Text color="#6b7280" fontWeight="500">Evidence Sources</Text>
-                          <Text fontWeight="700" color="#111827">8 sources</Text>
+                      <VStack align="stretch" spacing={3} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Adoption Rate</Text>
+                          <HStack spacing={2}>
+                            <Text fontWeight="700" color="#16a34a">84%</Text>
+                            <ArrowUpIcon w={3} h={3} color="#16a34a" />
+                          </HStack>
                         </HStack>
-                        <HStack justify="space-between" fontSize="xs">
-                          <Text color="#6b7280" fontWeight="500">Specificity Score</Text>
-                          <Text fontWeight="700" color="#10b981">High</Text>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Weekly Active Users</Text>
+                          <Text fontWeight="700" color="#111827">
+                            {selectedProduct === 'pmai' ? '3,124' : '2,456'}
+                          </Text>
                         </HStack>
-                        <HStack justify="space-between" fontSize="xs">
-                          <Text color="#6b7280" fontWeight="500">ICP Fit</Text>
-                          <Text fontWeight="700" color="#111827">95%</Text>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">User Satisfaction</Text>
+                          <HStack spacing={1}>
+                            {[1, 2, 3, 4, 5].map((i) => (
+                              <StarIcon key={i} w={3} h={3} color={i <= 4 ? '#fbbf24' : '#e5e7eb'} />
+                            ))}
+                            <Text fontSize="xs" fontWeight="600" color="#111827" ml={1}>4.6/5</Text>
+                          </HStack>
+                        </HStack>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Time Saved</Text>
+                          <Text fontWeight="700" color="#16a34a">
+                            {selectedProduct === 'pmai' ? '3.2k hrs/week' : '1.8k hrs/week'}
+                          </Text>
                         </HStack>
                       </VStack>
                     </Box>
@@ -2566,38 +2603,56 @@ function App() {
                       bg="#ffffff"
                       borderRadius="6px"
                       p={6}
-                      border="2px solid"
-                      borderColor="#f59e0b"
+                      border="1px solid"
+                      borderColor="#e5e7eb"
                       boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
                     >
-                      <HStack mb={4} spacing={2}>
-                        <Badge bg="#fef3c7" color="#d97706" px={3} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
-                          EXPLORE
-                        </Badge>
-                        <Badge bg="#f3f4f6" color="#4b5563" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
-                          Confidence: 68%
-                        </Badge>
+                      <HStack mb={4} spacing={2} justify="space-between">
+                        <HStack spacing={2}>
+                          <Badge bg="#dbeafe" color="#2563eb" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
+                            ON TRACK
+                          </Badge>
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">
+                            Shipped 10 days ago
+                          </Text>
+                        </HStack>
                       </HStack>
-                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={3}>
-                        {selectedProduct === 'pmai' ? 'Predictive Resource Allocation' : 'Multi-Agent Conversations'}
+                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={2}>
+                        {selectedProduct === 'pmai' ? 'Automated Risk Alerts' : 'Context-Aware Responses'}
                       </Text>
                       <Text fontSize="sm" color="#4b5563" mb={4} lineHeight="1.7">
                         {selectedProduct === 'pmai'
-                          ? 'Early signals for AI-powered resource allocation. 12 mentions, growing interest. Needs validation with power users.'
-                          : 'Users exploring multi-agent setups. 15 mentions, mostly from advanced users. Monitor for growth.'}
+                          ? 'AI-generated risk detection system. Monitors project health and sends proactive alerts.'
+                          : 'Intelligent context management. AI maintains conversation flow across long sessions.'}
                       </Text>
-                      <VStack align="stretch" spacing={2} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
-                        <HStack justify="space-between" fontSize="xs">
-                          <Text color="#6b7280" fontWeight="500">Evidence Sources</Text>
-                          <Text fontWeight="700" color="#111827">12 sources</Text>
+                      <VStack align="stretch" spacing={3} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Adoption Rate</Text>
+                          <HStack spacing={2}>
+                            <Text fontWeight="700" color="#2563eb">67%</Text>
+                            <ArrowUpIcon w={3} h={3} color="#2563eb" />
+                          </HStack>
                         </HStack>
-                        <HStack justify="space-between" fontSize="xs">
-                          <Text color="#6b7280" fontWeight="500">Specificity Score</Text>
-                          <Text fontWeight="700" color="#f59e0b">Medium</Text>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Weekly Active Users</Text>
+                          <Text fontWeight="700" color="#111827">
+                            {selectedProduct === 'pmai' ? '2,189' : '1,743'}
+                          </Text>
                         </HStack>
-                        <HStack justify="space-between" fontSize="xs">
-                          <Text color="#6b7280" fontWeight="500">ICP Fit</Text>
-                          <Text fontWeight="700" color="#111827">72%</Text>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">User Satisfaction</Text>
+                          <HStack spacing={1}>
+                            {[1, 2, 3, 4, 5].map((i) => (
+                              <StarIcon key={i} w={3} h={3} color={i <= 4 ? '#fbbf24' : '#e5e7eb'} />
+                            ))}
+                            <Text fontSize="xs" fontWeight="600" color="#111827" ml={1}>4.3/5</Text>
+                          </HStack>
+                        </HStack>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Impact</Text>
+                          <Text fontWeight="700" color="#2563eb">
+                            {selectedProduct === 'pmai' ? '45% fewer delays' : '38% better retention'}
+                          </Text>
                         </HStack>
                       </VStack>
                     </Box>
@@ -2606,112 +2661,220 @@ function App() {
                       bg="#ffffff"
                       borderRadius="6px"
                       p={6}
-                      border="2px solid"
-                      borderColor="#6b7280"
+                      border="1px solid"
+                      borderColor="#e5e7eb"
                       boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
                     >
-                      <HStack mb={4} spacing={2}>
-                        <Badge bg="#f3f4f6" color="#4b5563" px={3} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
-                          MONITOR
-                        </Badge>
-                        <Badge bg="#f3f4f6" color="#4b5563" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
-                          Confidence: 45%
-                        </Badge>
+                      <HStack mb={4} spacing={2} justify="space-between">
+                        <HStack spacing={2}>
+                          <Badge bg="#fef3c7" color="#d97706" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
+                            MONITORING
+                          </Badge>
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">
+                            Shipped 2 days ago
+                          </Text>
+                        </HStack>
                       </HStack>
-                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={3}>
-                        {selectedProduct === 'pmai' ? 'Mobile PM Dashboard' : 'Prompt Marketplace'}
+                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={2}>
+                        {selectedProduct === 'pmai' ? 'Smart Dependency Mapping' : 'Prompt Performance Optimizer'}
                       </Text>
                       <Text fontSize="sm" color="#4b5563" mb={4} lineHeight="1.7">
                         {selectedProduct === 'pmai'
-                          ? 'Occasional mentions of mobile dashboard. 6 sources, low volume. Track for trend changes.'
-                          : 'Some interest in prompt marketplace. 8 mentions, unclear demand. Watch for signals.'}
+                          ? 'AI-generated dependency visualization. Automatically maps project relationships and bottlenecks.'
+                          : 'AI analyzes prompt effectiveness and suggests improvements. Generated from usage patterns.'}
                       </Text>
-                      <VStack align="stretch" spacing={2} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
-                        <HStack justify="space-between" fontSize="xs">
-                          <Text color="#6b7280" fontWeight="500">Evidence Sources</Text>
-                          <Text fontWeight="700" color="#111827">6 sources</Text>
+                      <VStack align="stretch" spacing={3} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Adoption Rate</Text>
+                          <HStack spacing={2}>
+                            <Text fontWeight="700" color="#d97706">32%</Text>
+                            <Text fontSize="xs" color="#6b7280">Early days</Text>
+                          </HStack>
                         </HStack>
-                        <HStack justify="space-between" fontSize="xs">
-                          <Text color="#6b7280" fontWeight="500">Specificity Score</Text>
-                          <Text fontWeight="700" color="#6b7280">Low</Text>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Weekly Active Users</Text>
+                          <Text fontWeight="700" color="#111827">
+                            {selectedProduct === 'pmai' ? '892' : '654'}
+                          </Text>
                         </HStack>
-                        <HStack justify="space-between" fontSize="xs">
-                          <Text color="#6b7280" fontWeight="500">ICP Fit</Text>
-                          <Text fontWeight="700" color="#111827">52%</Text>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">User Satisfaction</Text>
+                          <HStack spacing={1}>
+                            {[1, 2, 3, 4, 5].map((i) => (
+                              <StarIcon key={i} w={3} h={3} color={i <= 3 ? '#fbbf24' : '#e5e7eb'} />
+                            ))}
+                            <Text fontSize="xs" fontWeight="600" color="#111827" ml={1}>3.9/5</Text>
+                          </HStack>
+                        </HStack>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Impact</Text>
+                          <Text fontWeight="700" color="#6b7280">TBD</Text>
                         </HStack>
                       </VStack>
                     </Box>
                   </Grid>
                 </Box>
 
-                {/* Streaks + Social Proof */}
+                {/* Community Insights */}
                 <Box mb={10}>
-                  <HStack mb={5} spacing={2}>
-                    <Heading size="md" color="#111827" fontWeight="700" letterSpacing="-0.1px">
-                      Activity & Insights
-                    </Heading>
+                  <HStack mb={5} spacing={2} justify="space-between">
+                    <HStack spacing={2}>
+                      <Heading size="md" color="#111827" fontWeight="700" letterSpacing="-0.1px">
+                        Feature Recommendations
+                      </Heading>
+                      <Badge bg="#dcfce7" color="#16a34a" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
+                        AI-Generated
+                      </Badge>
+                    </HStack>
                   </HStack>
-                  <Grid templateColumns="repeat(auto-fit, minmax(250px, 1fr))" gap={5}>
+                  <Grid templateColumns="repeat(auto-fit, minmax(350px, 1fr))" gap={5}>
                     <Box
-                      bg="linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)"
+                      bg="#ffffff"
                       borderRadius="6px"
                       p={6}
                       border="1px solid"
                       borderColor="#e5e7eb"
                       boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
                     >
-                      <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={2} textTransform="uppercase" letterSpacing="0.5px">
-                        Review Streak
+                      <HStack mb={4} spacing={2} justify="space-between">
+                        <HStack spacing={2}>
+                          <Badge bg="#dcfce7" color="#16a34a" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
+                            HIGH PRIORITY
+                          </Badge>
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">
+                            Confidence: 92%
+                          </Text>
+                        </HStack>
+                      </HStack>
+                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={2}>
+                        {selectedProduct === 'pmai' ? 'Jira Integration' : 'API Access for Prompts'}
                       </Text>
-                      <Text fontSize="3xl" fontWeight="700" color="#111827" mb={1}>7</Text>
-                      <Text fontSize="sm" color="#4b5563">days in a row</Text>
+                      <Text fontSize="sm" color="#4b5563" mb={4} lineHeight="1.7">
+                        {selectedProduct === 'pmai'
+                          ? '28 requests in last 3 days. High demand from enterprise customers. Estimated impact: $45k ARR. Recommended timeline: 2-3 weeks.'
+                          : '45 API integration requests. Strong signal from developers. Estimated impact: 2.3k new users. Recommended timeline: 3-4 weeks.'}
+                      </Text>
+                      <VStack align="stretch" spacing={3} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Request Count</Text>
+                          <Text fontWeight="700" color="#111827">
+                            {selectedProduct === 'pmai' ? '28' : '45'}
+                          </Text>
+                        </HStack>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Estimated Impact</Text>
+                          <Text fontWeight="700" color="#16a34a">
+                            {selectedProduct === 'pmai' ? '$45k ARR' : '2.3k users'}
+                          </Text>
+                        </HStack>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Recommended Timeline</Text>
+                          <Text fontWeight="700" color="#111827">
+                            {selectedProduct === 'pmai' ? '2-3 weeks' : '3-4 weeks'}
+                          </Text>
+                        </HStack>
+                      </VStack>
                     </Box>
+
                     <Box
-                      bg="linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)"
+                      bg="#ffffff"
                       borderRadius="6px"
                       p={6}
                       border="1px solid"
                       borderColor="#e5e7eb"
                       boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
                     >
-                      <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={2} textTransform="uppercase" letterSpacing="0.5px">
-                        Insights Reviewed
+                      <HStack mb={4} spacing={2} justify="space-between">
+                        <HStack spacing={2}>
+                          <Badge bg="#dbeafe" color="#2563eb" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
+                            MEDIUM PRIORITY
+                          </Badge>
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">
+                            Confidence: 78%
+                          </Text>
+                        </HStack>
+                      </HStack>
+                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={2}>
+                        {selectedProduct === 'pmai' ? 'Mobile App Enhancements' : 'Voice Input Improvements'}
                       </Text>
-                      <Text fontSize="3xl" fontWeight="700" color="#111827" mb={1}>23</Text>
-                      <Text fontSize="sm" color="#4b5563">this week</Text>
+                      <Text fontSize="sm" color="#4b5563" mb={4} lineHeight="1.7">
+                        {selectedProduct === 'pmai'
+                          ? 'Mobile usage up 34%. Users requesting offline mode and push notifications. Estimated impact: 15% engagement increase.'
+                          : 'Voice feature adoption growing. Users want better accuracy and multi-language support. Estimated impact: 18% user growth.'}
+                      </Text>
+                      <VStack align="stretch" spacing={3} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Signal Strength</Text>
+                          <Text fontWeight="700" color="#2563eb">
+                            {selectedProduct === 'pmai' ? '34% growth' : '23% adoption'}
+                          </Text>
+                        </HStack>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Estimated Impact</Text>
+                          <Text fontWeight="700" color="#2563eb">
+                            {selectedProduct === 'pmai' ? '15% engagement' : '18% growth'}
+                          </Text>
+                        </HStack>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Recommended Timeline</Text>
+                          <Text fontWeight="700" color="#111827">
+                            {selectedProduct === 'pmai' ? '4-6 weeks' : '5-7 weeks'}
+                          </Text>
+                        </HStack>
+                      </VStack>
                     </Box>
+
                     <Box
-                      bg="linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)"
+                      bg="#ffffff"
                       borderRadius="6px"
                       p={6}
                       border="1px solid"
                       borderColor="#e5e7eb"
                       boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
                     >
-                      <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={2} textTransform="uppercase" letterSpacing="0.5px">
-                        Top Saved Opportunities
+                      <HStack mb={4} spacing={2} justify="space-between">
+                        <HStack spacing={2}>
+                          <Badge bg="#fef3c7" color="#d97706" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
+                            EXPLORATORY
+                          </Badge>
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">
+                            Confidence: 65%
+                          </Text>
+                        </HStack>
+                      </HStack>
+                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={2}>
+                        {selectedProduct === 'pmai' ? 'AI-Powered Analytics Dashboard' : 'Multi-Agent Workflow Builder'}
                       </Text>
-                      <Text fontSize="3xl" fontWeight="700" color="#111827" mb={1}>5</Text>
-                      <Text fontSize="sm" color="#4b5563">in your org</Text>
-                    </Box>
-                    <Box
-                      bg="linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)"
-                      borderRadius="6px"
-                      p={6}
-                      border="1px solid"
-                      borderColor="#e5e7eb"
-                      boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
-                    >
-                      <Text fontSize="xs" color="#6b7280" fontWeight="500" mb={2} textTransform="uppercase" letterSpacing="0.5px">
-                        Actions This Week
+                      <Text fontSize="sm" color="#4b5563" mb={4} lineHeight="1.7">
+                        {selectedProduct === 'pmai'
+                          ? 'Emerging trend from power users. 12 mentions in community. Potential differentiator. Recommend user research first.'
+                          : 'Growing interest from enterprise. 8 mentions. Could unlock new use cases. Recommend validation with beta users.'}
                       </Text>
-                      <Text fontSize="3xl" fontWeight="700" color="#111827" mb={1}>47</Text>
-                      <Text fontSize="sm" color="#4b5563">approved/snoozed</Text>
+                      <VStack align="stretch" spacing={3} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Signal Strength</Text>
+                          <Text fontWeight="700" color="#d97706">
+                            {selectedProduct === 'pmai' ? '12 mentions' : '8 mentions'}
+                          </Text>
+                        </HStack>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Next Step</Text>
+                          <Text fontWeight="700" color="#d97706">
+                            User Research
+                          </Text>
+                        </HStack>
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Recommended Timeline</Text>
+                          <Text fontWeight="700" color="#111827">
+                            TBD
+                          </Text>
+                        </HStack>
+                      </VStack>
                     </Box>
                   </Grid>
                 </Box>
 
-                {/* Social Media Insights */}
+                {/* Community Insights */}
                 <Box mb={6}>
                   <HStack mb={5} spacing={2} justify="space-between">
                     <HStack spacing={2}>
@@ -3434,185 +3597,34 @@ function App() {
           </TabPanels>
         </Tabs>
 
-        {/* AI Assistant Sidebar */}
-        <Box
-          position="fixed"
-          right={chatOpen ? 0 : '-400px'}
-          top={0}
-          bottom={0}
-          w="400px"
-          bg="#ffffff"
-          borderLeft="1px solid"
-          borderColor="#e5e7eb"
-          display="flex"
-          flexDirection="column"
-          zIndex={1000}
-          boxShadow="-2px 0 16px rgba(0, 0, 0, 0.1)"
-          transition="right 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
-          overflow="hidden"
-        >
-          {/* Chat Header - Dark */}
+
+        {/* AI Assistant Toggle Button - Fixed position, only in Sandbox tab */}
+        {activeTab === 1 && (
           <Box
-            px={4}
-            py={3}
-            borderBottom="1px solid"
-            borderColor="#4b5563"
-            display="flex"
-            alignItems="center"
-            justifyContent="space-between"
-            bg="#374151"
-            flexShrink={0}
+            position="fixed"
+            bottom="24px"
+            right="24px"
+            zIndex={9999}
+            pointerEvents="auto"
           >
-            <HStack spacing={2}>
-              <Text fontSize="md" color="#f3f4f6" fontWeight="600">
-                AI Assistant
-              </Text>
-              {chatMessages.length > 0 && (
-                <Badge
-                  bg="#4b5563"
-                  color="#d1d5db"
-                  px={2}
-                  py={0.5}
-                  borderRadius="3px"
-                  fontSize="xs"
-                  fontWeight="600"
-                >
-                  {chatMessages.length}
-                </Badge>
-              )}
-            </HStack>
             <IconButton
-              icon={<CloseIcon />}
+              icon={<ChatIcon />}
               onClick={handleToggleChat}
-              variant="ghost"
-              size="sm"
-              aria-label="Close chat"
-              color="#d1d5db"
-              _hover={{ bg: '#4b5563', color: '#f3f4f6' }}
+              size="lg"
+              aria-label="Open AI Assistant"
+              bg={chatOpen ? 'gray.700' : 'gray.600'}
+              color="white"
+              borderRadius="50%"
+              boxShadow="0 4px 12px rgba(0, 0, 0, 0.15)"
+              _hover={{ bg: 'gray.700', transform: 'scale(1.05)' }}
+              _active={{ transform: 'scale(0.95)' }}
+              transition="all 0.2s"
+              w="56px"
+              h="56px"
+              pointerEvents="auto"
             />
           </Box>
-
-          {/* Chat Messages */}
-          <Box
-            flex={1}
-            overflowY="auto"
-            p={6}
-            display="flex"
-            flexDirection="column"
-            gap={4}
-            bg="#f9fafb"
-          >
-            {chatMessages.length === 0 ? (
-              <Box textAlign="center" py={16}>
-                <Text color="#6b7280" fontSize="md" fontWeight="500" mb={2}>
-                  Ask for changes to your application
-                </Text>
-                <Text color="#9ca3af" fontSize="sm">
-                  Type a message below to get started
-                </Text>
-              </Box>
-            ) : (
-              chatMessages.map((msg, idx) => (
-                <Box
-                  key={idx}
-                  alignSelf={msg.role === 'user' ? 'flex-end' : 'flex-start'}
-                  maxW="85%"
-                >
-                  <Box
-                    bg={msg.role === 'user' ? '#4b5563' : '#e5e7eb'}
-                    color={msg.role === 'user' ? 'white' : '#374151'}
-                    px={4}
-                    py={3}
-                    borderRadius="6px"
-                    fontSize="sm"
-                    lineHeight="1.6"
-                  >
-                    <Text>{msg.content}</Text>
-                  </Box>
-                </Box>
-              ))
-            )}
-          </Box>
-
-          {/* Chat Input */}
-          <Box
-            px={4}
-            py={4}
-            borderTop="1px solid"
-            borderColor="#e5e7eb"
-            bg="#ffffff"
-            flexShrink={0}
-          >
-            <HStack spacing={3}>
-              <Input
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask for changes..."
-                bg="#ffffff"
-                borderColor="#d1d5db"
-                borderWidth="1px"
-                size="md"
-                fontSize="14px"
-                fontWeight="400"
-                letterSpacing="-0.01em"
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter' && chatInput.trim()) {
-                    const newMessage = { role: 'user', content: chatInput };
-                    setChatMessages([...chatMessages, newMessage]);
-                    setChatInput('');
-                    // TODO: Send to AI and get response
-                  }
-                }}
-                _hover={{ borderColor: '#9ca3af', bg: '#f9fafb' }}
-                _focus={{ borderColor: '#6b7280', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.1)', bg: '#ffffff' }}
-                _placeholder={{ color: '#9ca3af', fontWeight: '400', opacity: 1 }}
-              />
-              <Button
-                size="md"
-                bg="#4b5563"
-                color="white"
-                onClick={() => {
-                  if (chatInput.trim()) {
-                    const newMessage = { role: 'user', content: chatInput };
-                    setChatMessages([...chatMessages, newMessage]);
-                    setChatInput('');
-                    // TODO: Send to AI and get response
-                  }
-                }}
-                isDisabled={!chatInput.trim()}
-                _hover={{ bg: '#374151' }}
-                fontWeight="600"
-                px={6}
-              >
-                Send
-              </Button>
-            </HStack>
-          </Box>
-        </Box>
-
-        {/* AI Assistant Toggle Button - Fixed position */}
-        <Box
-          position="fixed"
-          bottom="24px"
-          right="24px"
-          zIndex={999}
-        >
-          <IconButton
-            icon={<ChatIcon />}
-            onClick={handleToggleChat}
-            size="lg"
-            aria-label="Toggle AI Assistant"
-            bg={chatOpen ? 'gray.700' : 'gray.600'}
-            color="white"
-            borderRadius="50%"
-            boxShadow="0 4px 12px rgba(0, 0, 0, 0.15)"
-            _hover={{ bg: 'gray.700', transform: 'scale(1.05)' }}
-            _active={{ transform: 'scale(0.95)' }}
-            transition="all 0.2s"
-            w="56px"
-            h="56px"
-          />
-        </Box>
+        )}
       </Box>
     </ChakraProvider>
   );

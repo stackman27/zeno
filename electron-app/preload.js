@@ -12,5 +12,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   openChatWindow: () => ipcRenderer.invoke('open-chat-window'),
   closeChatWindow: () => ipcRenderer.invoke('close-chat-window'),
-  isChatWindowOpen: () => ipcRenderer.invoke('is-chat-window-open')
+  isChatWindowOpen: () => ipcRenderer.invoke('is-chat-window-open'),
+  pushToGitHubPR: (options) => ipcRenderer.invoke('push-to-github-pr', options)
 });
