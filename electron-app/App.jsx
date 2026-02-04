@@ -554,12 +554,22 @@ function App() {
   const toast = useToast();
 
   useEffect(() => {
-    // Set up output listener
-    window.electronAPI?.onZenoOutput((data) => {
-      const text = data.data;
-      setOutput(prev => prev + text);
-      parseUrlsFromOutput(text);
-    });
+    // Ensure electronAPI is available (wait for it if needed)
+    const setupOutputListener = () => {
+      if (window.electronAPI) {
+        // Set up output listener
+        window.electronAPI.onZenoOutput((data) => {
+          const text = data.data;
+          setOutput(prev => prev + text);
+          parseUrlsFromOutput(text);
+        });
+      } else {
+        // Wait a bit for web-api.js to load (browser mode)
+        setTimeout(setupOutputListener, 100);
+      }
+    };
+    
+    setupOutputListener();
 
     return () => {
       window.electronAPI?.removeZenoOutputListener();
@@ -883,10 +893,11 @@ function App() {
                                 setGithubConnected(true);
                                 setAvailableRepos([
                                   { name: 'chat-buddy', fullName: 'stackman27/chat-buddy', description: 'AI-powered chat application with React frontend and Python backend', language: 'Python', stars: 187 },
-                                  ]);
+                                  { name: 'zeno', fullName: 'stackman27/zeno', description: 'Zeno - Docker-based workflow runner with Electron UI for running repos', language: 'Go', stars: 42 },
+                                ]);
                                 setAiAgentMessages(prev => [...prev, {
                                   role: 'agent',
-                                  content: 'Successfully connected to GitHub! Found 5 repositories.',
+                                  content: 'Successfully connected to GitHub! Found 2 repositories.',
                                   timestamp: new Date()
                                 }]);
                               }, 2000);

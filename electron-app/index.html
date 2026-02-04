@@ -18,6 +18,22 @@
 </head>
 <body>
   <div id="root"></div>
+  <!-- Load Socket.IO for web mode (browser only) -->
+  <script>
+    if (typeof require === 'undefined') {
+      // Running in browser - load Socket.IO first
+      const socketScript = document.createElement('script');
+      socketScript.src = 'https://cdn.socket.io/4.7.2/socket.io.min.js';
+      socketScript.onload = () => {
+        // Then load web API (which handles hot reload)
+        const apiScript = document.createElement('script');
+        apiScript.src = '/web-api.js';
+        document.head.appendChild(apiScript);
+      };
+      document.head.appendChild(socketScript);
+    }
+  </script>
+  <!-- Load React app (works in both Electron and browser) -->
   <script type="module" src="renderer.bundle.js"></script>
 </body>
 </html>

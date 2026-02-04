@@ -223,6 +223,80 @@ run_node() {
   esac
 }
 
+run_electron() {
+  if [ ! -d electron-app ]; then
+    echo "electron-app directory not found" >&2
+    exit 65
+  fi
+
+  pushd electron-app >/dev/null
+
+  # npm cache locations (avoid writing into repo mount)
+  export NPM_CONFIG_PREFIX="/work/npm-global"
+  export npm_config_cache="/work/.npm-cache"
+  mkdir -p "$NPM_CONFIG_PREFIX" "$npm_config_cache"
+  
+  # Electron cache directory (Electron tries to write to /.cache by default)
+  export ELECTRON_CACHE="/work/.cache/electron"
+  export ELECTRON_GET_USE_PROXY="0"
+  # Set HOME to /work to avoid permission issues with ~/.cache
+  export HOME="/work"
+  mkdir -p "$ELECTRON_CACHE" "$HOME/.cache"
+
+  # Keep deps in /work, but present them as ./node_modules
+  mkdir -p /work/electron-node_modules/node_modules
+  if [ ! -L node_modules ]; then
+    rm -rf node_modules
+    ln -s /work/electron-node_modules/node_modules node_modules
+  fi
+
+  # Install deps only if missing
+  if [ ! -d node_modules/.bin/electron ]; then
+    rm -rf /work/electron-node_modules/node_modules/*
+    if [ -f pnpm-lock.yaml ]; then
+      pnpm install --frozen-lockfile
+    elif [ -f yarn.lock ]; then
+      yarn install --frozen-lockfile
+    elif [ -f package-lock.json ]; then
+      npm ci
+    else
+      npm install
+    fi
+  fi
+
+  case "$WORKFLOW" in
+    run)
+      # Run as web server with hot reload (accessible via browser)
+      # Use PORT from environment or default to 3000
+      export PORT="${FRONT_EXPOSE_PORT:-3000}"
+      npm run dev:web &
+      WEB_SERVER_PID=$!
+
+      trap 'kill ${WEB_SERVER_PID:-} ${VNC_PID:-} ${XVFB_PID:-} 2>/dev/null || true' INT TERM
+
+      # Wait for web server
+      wait "$WEB_SERVER_PID"
+      EXIT_CODE=$?
+
+      # Cleanup
+      kill ${WEB_SERVER_PID:-} ${VNC_PID:-} ${XVFB_PID:-} 2>/dev/null || true
+      exit $EXIT_CODE
+      ;;
+    test)  npm test --silent ;;
+    lint)  npm run lint --silent ;;
+    build) npm run build --silent ;;
+    *) echo "Unknown WORKFLOW: $WORKFLOW" >&2; exit 64 ;;
+  esac
+
+  popd >/dev/null
+}
+
+# Electron app detection: electron-app directory
+if [ -d electron-app ] && [ -f electron-app/package.json ] && [ -f electron-app/main.js ]; then
+  run_electron
+  exit 0
+fi
+
 # Monorepo polyglot layout: python-server + react-frontend
 if [ "$WORKFLOW" = "run" ] && [ -d python-server ] && [ -d react-frontend ]; then
   run_monorepo_polyglot

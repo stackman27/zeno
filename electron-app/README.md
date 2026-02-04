@@ -33,6 +33,12 @@ For development with DevTools:
 npm run dev
 ```
 
+For web version use 
+```bash
+npm run dev:web
+```
+
+
 ## Building
 
 The build process uses `esbuild` to bundle React and Chakra UI:

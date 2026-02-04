@@ -1,9 +1,29 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const fs = require('fs');
 
 let mainWindow;
 let chatWindow = null;
+
+// Watch for bundle file changes and reload window in development
+if (process.argv.includes('--dev') || process.env.NODE_ENV === 'development') {
+  const watchFiles = [
+    path.join(__dirname, 'renderer.bundle.js'),
+    path.join(__dirname, 'chat.bundle.js')
+  ];
+  
+  watchFiles.forEach(file => {
+    if (fs.existsSync(file)) {
+      fs.watchFile(file, { interval: 500 }, (curr, prev) => {
+        if (curr.mtime !== prev.mtime && mainWindow) {
+          console.log(`🔄 Bundle changed, reloading window...`);
+          mainWindow.reload();
+        }
+      });
+    }
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({

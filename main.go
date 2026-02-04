@@ -35,13 +35,30 @@ const (
 	ProjPython   ProjectType = "python"
 	ProjNode     ProjectType = "node"
 	ProjPolyglot ProjectType = "polyglot"
+	ProjElectron ProjectType = "electron"
 	ProjUnknown  ProjectType = "unknown"
 )
 
 func DetectProjectType(repoDir string) (ProjectType, error) {
 	has := func(rel string) bool {
-		_, err := os.Stat(filepath.Join(repoDir, rel))
-		return err == nil
+		path := filepath.Join(repoDir, rel)
+		info, err := os.Stat(path)
+		if err != nil {
+			return false
+		}
+		// For directories, check that it exists and is a directory
+		// For files, check that it exists and is a file
+		return info != nil
+	}
+
+	// Electron app detection: electron-app directory with package.json and main.js
+	// This should be checked first as it's the most specific
+	electronPkgPath := filepath.Join(repoDir, "electron-app", "package.json")
+	electronMainPath := filepath.Join(repoDir, "electron-app", "main.js")
+	if _, err := os.Stat(electronPkgPath); err == nil {
+		if _, err := os.Stat(electronMainPath); err == nil {
+			return ProjElectron, nil
+		}
 	}
 
 	// TODO MAKE THIS MORE GENERIC
@@ -76,6 +93,8 @@ func RunnerImage(pt ProjectType) string {
 		return "zeno/runner-node:latest"
 	case ProjPolyglot:
 		return "zeno/runner-polyglot:latest"
+	case ProjElectron:
+		return "zeno/runner-electron:latest"
 	default:
 		// fallback
 		return "zeno/runner-polyglot:latest"
@@ -90,6 +109,8 @@ func DockerfileFor(pt ProjectType) string {
 		return "runner-node.Dockerfile"
 	case ProjPolyglot:
 		return "runner-polyglot.Dockerfile"
+	case ProjElectron:
+		return "runner-electron.Dockerfile"
 	default:
 		return "runner-polyglot.Dockerfile"
 	}
@@ -289,9 +310,21 @@ func RunRepo(
 	}
 	if onLog != nil {
 		onLog(fmt.Sprintf("[info] detected project type: %s\n", pt))
+		// Debug: log what files were found
+		if pt == ProjUnknown {
+			onLog(fmt.Sprintf("[debug] checking repo directory: %s\n", repoDir))
+			electronPkg := filepath.Join(repoDir, "electron-app", "package.json")
+			electronMain := filepath.Join(repoDir, "electron-app", "main.js")
+			if _, err := os.Stat(electronPkg); err == nil {
+				onLog(fmt.Sprintf("[debug] found: %s\n", electronPkg))
+			}
+			if _, err := os.Stat(electronMain); err == nil {
+				onLog(fmt.Sprintf("[debug] found: %s\n", electronMain))
+			}
+		}
 	}
 
-	if cmd == CmdRun && pt != ProjPolyglot && service != "ui" && entry == "" {
+	if cmd == CmdRun && pt != ProjPolyglot && pt != ProjElectron && service != "ui" && entry == "" {
 		return nil, fmt.Errorf("--entry is required for %s repos when --workflow=run", pt)
 	}
 
@@ -394,8 +427,16 @@ func RunDockerWorkflow(
 		"-e", "WORKFLOW=" + string(workflow),
 	}
 
-	// ---- polyglot monorepo RUN: publish UI + API ----
-	if pt == ProjPolyglot && workflow == CmdRun {
+	// ---- Electron app: run as web server (accessible via browser) ----
+	if pt == ProjElectron && workflow == CmdRun {
+		// Electron app runs as web server on port 3000 (or FRONT_EXPOSE_PORT)
+		frontExpose := 3000
+		if uiHostPort != 0 {
+			args = append(args, "-p", fmt.Sprintf("%d:%d", uiHostPort, frontExpose))
+			args = append(args, "-e", fmt.Sprintf("FRONT_EXPOSE_PORT=%d", frontExpose))
+		}
+	} else if pt == ProjPolyglot && workflow == CmdRun {
+		// ---- polyglot monorepo RUN: publish UI + API ----
 		frontExpose := 3001
 		backExpose := 5001
 
@@ -409,7 +450,6 @@ func RunDockerWorkflow(
 		}
 
 	} else {
-
 		// ---- single-port mode (python-only or node-only) ----
 		exposePort := 5001
 		targetPort := 5000
@@ -439,8 +479,14 @@ func RunDockerWorkflow(
 		args = append(args, "-e", k+"="+v)
 	}
 
+	// Convert repoDir to absolute path (Docker requires absolute paths for volume mounts)
+	absRepoDir, err := filepath.Abs(repoDir)
+	if err != nil {
+		return -1, fmt.Errorf("failed to get absolute path for repo directory: %w", err)
+	}
+
 	args = append(args,
-		"-v", repoDir+":/repo:rw",
+		"-v", absRepoDir+":/repo:rw",
 		"-v", workDir+":/work:rw",
 	)
 
