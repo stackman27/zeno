@@ -166,6 +166,26 @@ ipcMain.handle('run-zeno', async (event, options) => {
   });
 });
 
+// Resolve a (possibly relative) path from the renderer into an absolute path under the zeno root.
+ipcMain.handle('resolve-path', async (_event, maybeRelativePath) => {
+  if (!maybeRelativePath || typeof maybeRelativePath !== 'string') {
+    return { ok: false, error: 'path must be a non-empty string' };
+  }
+
+  const zenoRoot = path.resolve(path.join(__dirname, '..'));
+  const resolved = path.isAbsolute(maybeRelativePath)
+    ? maybeRelativePath
+    : path.resolve(path.join(zenoRoot, maybeRelativePath));
+
+  const normalizedRoot = zenoRoot.endsWith(path.sep) ? zenoRoot : zenoRoot + path.sep;
+  const normalizedResolved = path.resolve(resolved);
+  if (!(normalizedResolved === zenoRoot || normalizedResolved.startsWith(normalizedRoot))) {
+    return { ok: false, error: `resolved path must be under ${zenoRoot}` };
+  }
+
+  return { ok: true, path: normalizedResolved };
+});
+
 // IPC handler for stopping the process
 ipcMain.handle('stop-zeno', async () => {
   if (currentProcess) {

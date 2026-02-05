@@ -95,7 +95,7 @@ function ChatWindow() {
         >
           <HStack spacing={2}>
             <Text fontSize="md" color="gray.700" fontWeight="600">
-              AI Assistant
+              Zeno AI Assistant
             </Text>
             {chatMessages.length > 0 && (
               <Badge

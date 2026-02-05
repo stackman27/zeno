@@ -42956,7 +42956,7 @@
               flexShrink: 0,
               children: [
                 /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(HStack, { spacing: 2, children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Text, { fontSize: "md", color: "gray.700", fontWeight: "600", children: "AI Assistant" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Text, { fontSize: "md", color: "gray.700", fontWeight: "600", children: "Zeno AI Assistant" }),
                   chatMessages.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
                     Badge,
                     {

@@ -111,11 +111,15 @@ function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
+
+  // GitHub integration + product insights (UI-only)
   const [githubConnected, setGithubConnected] = useState(false);
   const [githubConnecting, setGithubConnecting] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState(null);
   const [availableRepos, setAvailableRepos] = useState([]);
   const [aiAgentMessages, setAiAgentMessages] = useState([]);
+
+  // Accumulate raw runner output so we can show clean step-based status updates.
   const rawOutputRef = useRef('');
   const [postIndices, setPostIndices] = useState({
     reddit: 0,
@@ -552,6 +556,19 @@ function App() {
       return { ...prev, [sourceId]: newIndex };
     });
   };
+
+  // Aider session/chat plumbing (aider_two)
+  const [aiderSession, setAiderSession] = useState(null);
+  const [isInitializingSession, setIsInitializingSession] = useState(false);
+  const [aiderModel, setAiderModel] = useState(() => localStorage.getItem('zeno_aider_model') || 'openai/gpt-4o-mini');
+  const [currentJobId, setCurrentJobId] = useState(null);
+  const [syncErrorJobId, setSyncErrorJobId] = useState(null);
+  const streamAbortRef = useRef(null);
+  const sessionInitPromiseRef = useRef(null);
+  const streamingAssistantIdxRef = useRef(-1);
+  const API_BASE_URL = 'http://127.0.0.1:8000';
+  const chatEndRef = useRef(null);
+  const chatScrollRef = useRef(null);
   const [formData, setFormData] = useState({
     repo: '',
     ref: 'main',
@@ -690,6 +707,43 @@ function App() {
     return statusMessages.join('\n');
   };
 
+  const scrollChatToBottom = (behavior = 'smooth') => {
+    // Prefer scrolling the container (more reliable than scrollIntoView in some Electron builds)
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTo({
+        top: chatScrollRef.current.scrollHeight,
+        behavior,
+      });
+      return;
+    }
+    // Fallback anchor scroll
+    chatEndRef.current?.scrollIntoView({ behavior, block: 'end' });
+  };
+
+  useEffect(() => {
+    localStorage.setItem('zeno_aider_model', aiderModel || '');
+  }, [aiderModel]);
+
+  useEffect(() => {
+    // Auto-scroll as messages arrive (including streaming)
+    scrollChatToBottom('auto');
+  }, [chatMessages]);
+
+  useEffect(() => {
+    if (chatOpen) {
+      // When opening the sidebar, jump to latest message
+      setTimeout(() => scrollChatToBottom('auto'), 0);
+    }
+  }, [chatOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (streamAbortRef.current) {
+        streamAbortRef.current.abort();
+        streamAbortRef.current = null;
+      }
+    };
+  }, []);
   useEffect(() => {
     // Ensure electronAPI is available (wait for it if needed)
     const setupOutputListener = () => {
@@ -773,6 +827,215 @@ function App() {
 
   const handleCloseChat = () => {
     setChatOpen(false);
+  };
+
+  const apiFetch = async (path, options = {}) => {
+    const url = `${API_BASE_URL}${path}`;
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      },
+    });
+    const contentType = res.headers.get('content-type') || '';
+    const payload = contentType.includes('application/json') ? await res.json() : await res.text();
+    if (!res.ok) {
+      const msg = typeof payload === 'string' ? payload : (payload?.detail ? JSON.stringify(payload.detail) : JSON.stringify(payload));
+      throw new Error(`${res.status} ${res.statusText}: ${msg}`);
+    }
+    return payload;
+  };
+
+  const resolveRepoPath = async () => {
+    const maybeDir = formData.dir || '';
+    if (!maybeDir) throw new Error('Set a repo directory first (e.g. repos/chat-buddy)');
+    const resp = await window.electronAPI?.resolvePath?.(maybeDir);
+    if (!resp?.ok) throw new Error(resp?.error || 'Failed to resolve repo path');
+    return resp.path;
+  };
+
+  const initializeSession = async () => {
+    if (aiderSession) return aiderSession;
+    if (sessionInitPromiseRef.current) return sessionInitPromiseRef.current;
+
+    setIsInitializingSession(true);
+    try {
+      const p = (async () => {
+        const repo_path = await resolveRepoPath();
+        const base_ref = (formData.ref || 'HEAD').trim() || 'HEAD';
+        return await apiFetch('/sessions', {
+          method: 'POST',
+          body: JSON.stringify({ repo_path, base_ref }),
+        });
+      })();
+
+      sessionInitPromiseRef.current = p;
+      const session = await p;
+
+      setAiderSession(session);
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: `Connected to ${session.workspace_path}` },
+      ]);
+
+      return session;
+    } finally {
+      setIsInitializingSession(false);
+      sessionInitPromiseRef.current = null;
+    }
+  };
+
+  const streamProductSummary = async (jobId) => {
+    // cancel any previous stream
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort();
+      streamAbortRef.current = null;
+    }
+
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+
+    // Product summary stream (live) emits plain-English summary chunks while the job runs.
+    const response = await fetch(`${API_BASE_URL}/product/jobs/${encodeURIComponent(jobId)}/summary/live`, {
+      headers: { Accept: 'text/event-stream' },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(text || `Failed to connect to summary stream (${response.status})`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let summary = '';
+
+    const setStreamingContent = (content) => {
+      setChatMessages((prev) => {
+        const idx = streamingAssistantIdxRef.current;
+        if (idx < 0 || idx >= prev.length) return prev;
+        const next = [...prev];
+        next[idx] = { ...next[idx], content };
+        return next;
+      });
+    };
+
+    const tryParseJson = (s) => {
+      try { return JSON.parse(s); } catch { return null; }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+
+      for (const event of events) {
+        const lines = event.split('\n');
+        let eventType = 'message';
+        let eventData = '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+          else if (line.startsWith('data: ')) eventData += line.slice(6);
+        }
+
+        if (!eventData) continue;
+        const parsed = tryParseJson(eventData);
+
+        if (eventType === 'meta') {
+          // Optional: surface meta as a small system note
+          const status = parsed?.status ? `status=${parsed.status}` : '';
+          const sync = parsed?.sync_status ? `sync=${parsed.sync_status}` : '';
+          const line = [status, sync].filter(Boolean).join(' ');
+          if (line) setChatMessages((prev) => [...prev, { role: 'assistant', content: line }]);
+          continue;
+        }
+
+        if (eventType === 'summary') {
+          const delta = (parsed && typeof parsed === 'object' && typeof parsed.text === 'string')
+            ? parsed.text
+            : (typeof eventData === 'string' ? eventData : String(eventData));
+          summary += delta;
+          setStreamingContent(summary.trim());
+          continue;
+        }
+
+        if (eventType === 'error') {
+          const errText = parsed?.error || (typeof eventData === 'string' ? eventData : String(eventData));
+          summary += `\n\nError: ${errText}`;
+          setStreamingContent(summary.trim());
+          continue;
+        }
+
+        if (eventType === 'done') {
+          return;
+        }
+      }
+    }
+  };
+
+  const retrySync = async () => {
+    if (!syncErrorJobId) return;
+    const data = await apiFetch(`/jobs/${encodeURIComponent(syncErrorJobId)}/sync`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    if (data?.status === 'synced') {
+      const fileCount = (data.files_updated?.length || 0) + (data.files_deleted?.length || 0);
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: `✓ Synced ${fileCount} file(s) to your repo` }]);
+      setSyncErrorJobId(null);
+    } else if (data?.status === 'no_changes') {
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: 'No changes to sync' }]);
+      setSyncErrorJobId(null);
+    } else {
+      throw new Error(data?.error || `Sync failed: ${data?.status || 'unknown'}`);
+    }
+  };
+
+  const handleSendToAider = async () => {
+    const messageText = chatInput.trim();
+    if (!messageText) return;
+
+    let session = aiderSession;
+    if (!session) {
+      session = await initializeSession();
+    }
+    if (!session?.session_id) {
+      throw new Error('Session not initialized');
+    }
+
+    // Add user message + streaming assistant placeholder (match widget pattern)
+    setChatMessages((prev) => {
+      const next = [
+        ...prev,
+        { role: 'user', content: messageText },
+        { role: 'assistant', content: '' },
+      ];
+      streamingAssistantIdxRef.current = next.length - 1;
+      return next;
+    });
+    setChatInput('');
+
+    const modelToSend = (aiderModel || '').trim();
+    if (!modelToSend) {
+      throw new Error("Set a model (e.g. openai/gpt-4o-mini, anthropic/claude-3-5-sonnet-20241022)");
+    }
+
+    const job = await apiFetch(`/sessions/${encodeURIComponent(session.session_id)}/edits`, {
+      method: 'POST',
+      body: JSON.stringify({ message: messageText, model: modelToSend }),
+    });
+    setCurrentJobId(job.job_id);
+
+    await streamProductSummary(job.job_id);
+    setCurrentJobId(null);
   };
 
   const handleSubmit = async (e) => {
