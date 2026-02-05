@@ -39,7 +39,8 @@ import {
   Spinner,
   Center,
   Tooltip,
-  Textarea
+  Textarea,
+  Image
 } from '@chakra-ui/react';
 import { ChevronRightIcon, CloseIcon, DeleteIcon, RepeatIcon, ExternalLinkIcon, ChatIcon, ChevronLeftIcon, InfoIcon, ArrowUpIcon, ArrowDownIcon, CheckIcon, TimeIcon, StarIcon, AddIcon } from '@chakra-ui/icons';
 
@@ -150,6 +151,11 @@ function App() {
   ];
   const [envContent, setEnvContent] = useState('');
   const { isOpen: isEnvModalOpen, onOpen: onEnvModalOpen, onClose: onEnvModalClose } = useDisclosure();
+  
+  // PR Insights state
+  const [prs, setPrs] = useState([]);
+  const [prsLoading, setPrsLoading] = useState(false);
+  const [prsError, setPrsError] = useState(null);
 
   // Simulate loading when Community Insights tab is opened or product is switched
   useEffect(() => {
@@ -161,6 +167,45 @@ function App() {
       return () => clearTimeout(timer);
     }
   }, [activeTab, selectedProduct]);
+
+  // Fetch PRs when PR Insights tab is opened
+  useEffect(() => {
+    if (activeTab === 3) { // PR Insights tab index
+      fetchPRs();
+    }
+  }, [activeTab]);
+
+  // Function to fetch PRs from GitHub
+  const fetchPRs = async () => {
+    if (!githubConnected) {
+      setPrsError('GitHub not connected');
+      return;
+    }
+
+    setPrsLoading(true);
+    setPrsError(null);
+
+    try {
+      const result = await window.electronAPI.fetchGitHubPRs({
+        owner: 'stackman27',
+        repoName: 'PEval',
+        state: 'all', // 'open', 'closed', or 'all'
+        perPage: 30
+      });
+
+      if (result.success) {
+        setPrs(result.prs || []);
+      } else {
+        setPrsError(result.error || 'Failed to fetch PRs');
+        setPrs([]);
+      }
+    } catch (error) {
+      setPrsError(error.message || 'Failed to fetch PRs');
+      setPrs([]);
+    } finally {
+      setPrsLoading(false);
+    }
+  };
 
   // Mock posts data for AI for Project Managers
   const pmaiRedditPosts = [
@@ -975,7 +1020,7 @@ function App() {
       deriveDirFromRepo(formData.repo) ||
       (selectedRepo?.name ? `repos/${selectedRepo.name}` : '');
 
-    if (!maybeDir) throw new Error('Set a repo directory first (e.g. repos/chat-buddy)');
+    if (!maybeDir) throw new Error('Set a repo directory first (e.g. repos/PEval)');
     const resp = await window.electronAPI?.resolvePath?.(maybeDir);
     if (!resp?.ok) throw new Error(resp?.error || 'Failed to resolve repo path');
     return resp.path;
@@ -1308,6 +1353,108 @@ function App() {
     }
   };
 
+  // Generate a descriptive PR title from chat conversation
+  const generatePRTitleFromConversation = () => {
+    if (!chatMessages || chatMessages.length === 0) {
+      return `Zeno: Automated changes - ${new Date().toLocaleDateString()}`;
+    }
+
+    // Extract user messages (what they asked for)
+    const userMessages = chatMessages
+      .filter(msg => msg.role === 'user' && msg.content && msg.content.trim())
+      .map(msg => msg.content.trim());
+
+    if (userMessages.length === 0) {
+      return `Zeno: Automated changes - ${new Date().toLocaleDateString()}`;
+    }
+
+    // Get the first user message as the main request
+    const firstRequest = userMessages[0];
+    
+    // Try to extract key action words and features
+    const actionWords = ['add', 'create', 'implement', 'fix', 'update', 'improve', 'refactor', 'remove', 'change', 'modify'];
+    const lowerRequest = firstRequest.toLowerCase();
+    
+    // Find the main action
+    let action = 'Update';
+    for (const word of actionWords) {
+      if (lowerRequest.includes(word)) {
+        action = word.charAt(0).toUpperCase() + word.slice(1);
+        break;
+      }
+    }
+
+    // Extract a short description (first 60 chars, clean up)
+    let description = firstRequest
+      .replace(/\n/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .substring(0, 60);
+    
+    // Remove trailing incomplete words
+    const lastSpace = description.lastIndexOf(' ');
+    if (lastSpace > 40) {
+      description = description.substring(0, lastSpace);
+    }
+    
+    // Capitalize first letter
+    description = description.charAt(0).toUpperCase() + description.slice(1);
+    
+    // If description is too short or generic, use a more descriptive approach
+    if (description.length < 10 || description.toLowerCase().includes('help') || description.toLowerCase().includes('can you')) {
+      // Try to find more specific content from later messages
+      const allUserContent = userMessages.join(' ').toLowerCase();
+      
+      // Look for common patterns
+      if (allUserContent.includes('feature') || allUserContent.includes('functionality')) {
+        description = 'Add new feature';
+      } else if (allUserContent.includes('bug') || allUserContent.includes('error') || allUserContent.includes('fix')) {
+        description = 'Fix issue';
+      } else if (allUserContent.includes('ui') || allUserContent.includes('interface') || allUserContent.includes('design')) {
+        description = 'Update UI';
+      } else if (allUserContent.includes('api') || allUserContent.includes('endpoint')) {
+        description = 'Update API';
+      } else if (allUserContent.includes('config') || allUserContent.includes('setting')) {
+        description = 'Update configuration';
+      } else {
+        description = 'Implement changes';
+      }
+    }
+
+    // Construct title: "Action: Description"
+    const title = `${action}: ${description}`;
+    
+    // Ensure title is not too long (GitHub PR titles should be concise)
+    if (title.length > 72) {
+      return title.substring(0, 69) + '...';
+    }
+    
+    return title;
+  };
+
+  // Generate PR body with conversation context
+  const generatePRBodyFromConversation = () => {
+    const baseBody = `This PR contains automated changes generated by Zeno AI.\n\n**Created:** ${new Date().toISOString()}`;
+    
+    if (selectedUrl) {
+      return `${baseBody}\n**Service:** ${selectedUrl}`;
+    }
+    
+    // Include conversation summary if available
+    if (chatMessages && chatMessages.length > 0) {
+      const userMessages = chatMessages
+        .filter(msg => msg.role === 'user' && msg.content && msg.content.trim())
+        .slice(0, 3) // First 3 user messages
+        .map(msg => `- ${msg.content.trim().substring(0, 100)}${msg.content.length > 100 ? '...' : ''}`);
+      
+      if (userMessages.length > 0) {
+        return `${baseBody}\n\n**Changes requested:**\n${userMessages.join('\n')}`;
+      }
+    }
+    
+    return baseBody;
+  };
+
   const handlePushToGitHubPR = async () => {
     if (!githubConnected) {
       toast({
@@ -1330,7 +1477,7 @@ function App() {
     
     // Default to chat-buddy repository as specified
     if (!repoDir) {
-      repoDir = 'repos/chat-buddy';
+      repoDir = 'repos/PEval';
     }
 
     try {
@@ -1342,11 +1489,15 @@ function App() {
         isClosable: true,
       });
 
+      // Generate descriptive title and body from conversation
+      const prTitle = generatePRTitleFromConversation();
+      const prBody = generatePRBodyFromConversation();
+
       const result = await window.electronAPI.pushToGitHubPR({
         repoDir: repoDir,
-        prTitle: `Zeno: Automated changes - ${new Date().toLocaleDateString()}`,
-        prBody: `This PR contains automated changes generated by Zeno.\n\n**Created:** ${new Date().toISOString()}\n**Service:** ${selectedUrl}`,
-        commitMessage: `Zeno: Automated changes from ${new Date().toISOString()}`
+        prTitle: prTitle,
+        prBody: prBody,
+        commitMessage: `Zeno: ${prTitle}`
       });
 
       if (result.success) {
@@ -1566,17 +1717,17 @@ function App() {
                   {githubConnected ? (
                     <HStack spacing={2} align="center">
                       <Text color="#f3f4f6" fontSize="sm" fontWeight="500">
-                        Zeno AI
+                        @zenoAI-bot
                       </Text>
-                      <Box
-                        as="svg"
-                        w={5}
-                        h={5}
-                        fill="#f3f4f6"
-                        viewBox="0 0 24 24"
-                      >
-                        <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-                      </Box>
+                      <Image
+                        src="https://avatars.githubusercontent.com/u/259291844?s=80&v=4"
+                        alt="zenoAI-bot"
+                        w={6}
+                        h={6}
+                        borderRadius="50%"
+                        border="1px solid"
+                        borderColor="rgba(255, 255, 255, 0.2)"
+                      />
                     </HStack>
                   ) : (
                     <Text color="#9ca3af" fontSize="sm" fontWeight="500">
@@ -1637,27 +1788,69 @@ function App() {
                             Connect the AI agent to GitHub to access your repositories and run workflows.
                           </Text>
                           <Button
-                            onClick={() => {
+                            onClick={async () => {
                               setGithubConnecting(true);
                               setAiAgentMessages([{
                                 role: 'agent',
                                 content: 'Connecting to GitHub...',
                                 timestamp: new Date()
                               }]);
-                              // Simulate connection
-                              setTimeout(() => {
-                                setGithubConnecting(false);
-                                setGithubConnected(true);
-                                setAvailableRepos([
-                                  { name: 'chat-buddy', fullName: 'stackman27/chat-buddy', description: 'AI-powered chat application with React frontend and Python backend', language: 'Python', stars: 187 },
-                                  { name: 'zeno', fullName: 'stackman27/zeno', description: 'Zeno - Docker-based workflow runner with Electron UI for running repos', language: 'Go', stars: 42 },
-                                ]);
+                              
+                              try {
+                                // Verify GitHub token and get user info
+                                const result = await window.electronAPI.verifyGitHubToken();
+                                
+                                if (result.success) {
+                                  setGithubConnected(true);
+                                  setAvailableRepos([
+                                    { name: 'PEval', fullName: 'stackman27/PEval', description: 'AI-powered prompt evaluation system', language: 'Python', stars: 187 },
+                                    { name: 'zeno', fullName: 'stackman27/zeno', description: 'Zeno - Docker-based workflow runner with Electron UI for running repos', language: 'Go', stars: 42 },
+                                  ]);
+                                  setAiAgentMessages(prev => [...prev, {
+                                    role: 'agent',
+                                    content: `Successfully connected to GitHub as @${result.user.login}! Found 2 repositories.`,
+                                    timestamp: new Date()
+                                  }]);
+                                  
+                                  toast({
+                                    title: 'Connected to GitHub',
+                                    description: `Connected as ${result.user.login}`,
+                                    status: 'success',
+                                    duration: 3000,
+                                    isClosable: true,
+                                  });
+                                } else {
+                                  setAiAgentMessages(prev => [...prev, {
+                                    role: 'agent',
+                                    content: `Failed to connect: ${result.error}`,
+                                    timestamp: new Date()
+                                  }]);
+                                  
+                                  toast({
+                                    title: 'Connection Failed',
+                                    description: result.error || 'Failed to connect to GitHub',
+                                    status: 'error',
+                                    duration: 5000,
+                                    isClosable: true,
+                                  });
+                                }
+                              } catch (error) {
                                 setAiAgentMessages(prev => [...prev, {
                                   role: 'agent',
-                                  content: 'Successfully connected to GitHub! Found 2 repositories.',
+                                  content: `Error: ${error.message}`,
                                   timestamp: new Date()
                                 }]);
-                              }, 2000);
+                                
+                                toast({
+                                  title: 'Connection Error',
+                                  description: error.message || 'Failed to connect to GitHub',
+                                  status: 'error',
+                                  duration: 5000,
+                                  isClosable: true,
+                                });
+                              } finally {
+                                setGithubConnecting(false);
+                              }
                             }}
                             bg="#4b5563"
                             color="white"
@@ -2584,7 +2777,7 @@ function App() {
                         fontWeight="600"
                         _hover={{ bg: selectedProduct === 'chatbuddy' ? '#374151' : '#e5e7eb' }}
                       >
-                        Chat-Buddy
+                        PEval
                       </Button>
                     </HStack>
                   </HStack>
@@ -3970,213 +4163,198 @@ function App() {
                     <HStack spacing={2}>
                       <Button
                         size="sm"
-                        onClick={() => setSelectedProduct('pmai')}
-                        bg={selectedProduct === 'pmai' ? '#4b5563' : '#f3f4f6'}
-                        color={selectedProduct === 'pmai' ? 'white' : '#4b5563'}
+                        onClick={fetchPRs}
+                        isLoading={prsLoading}
+                        leftIcon={<RepeatIcon />}
+                        bg="#4b5563"
+                        color="white"
                         fontWeight="600"
-                        _hover={{ bg: selectedProduct === 'pmai' ? '#374151' : '#e5e7eb' }}
+                        _hover={{ bg: '#374151' }}
                       >
-                        Zeno
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() => setSelectedProduct('chatbuddy')}
-                        bg={selectedProduct === 'chatbuddy' ? '#4b5563' : '#f3f4f6'}
-                        color={selectedProduct === 'chatbuddy' ? 'white' : '#4b5563'}
-                        fontWeight="600"
-                        _hover={{ bg: selectedProduct === 'chatbuddy' ? '#374151' : '#e5e7eb' }}
-                      >
-                        Chat-Buddy
+                        Refresh
                       </Button>
                     </HStack>
                   </HStack>
                 </Box>
 
-                {/* Shipped with Zeno AI */}
+                {/* PR Status Section */}
                 <Box mb={10}>
                   <HStack mb={5} spacing={2} justify="space-between">
                     <HStack spacing={2}>
                       <Heading size="md" color="#111827" fontWeight="700" letterSpacing="-0.1px">
-                        Shipped with Zeno AI
+                        Pull Requests
                       </Heading>
-                      <Badge bg="#dcfce7" color="#16a34a" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
-                        AI-Generated Features
-                      </Badge>
+                      {prs.length > 0 && (
+                        <Badge bg="#dbeafe" color="#2563eb" px={2} py={0.5} borderRadius="3px" fontSize="xs" fontWeight="600">
+                          {prs.length} PR{prs.length !== 1 ? 's' : ''}
+                        </Badge>
+                      )}
                     </HStack>
                   </HStack>
-                  <Grid templateColumns="repeat(auto-fit, minmax(350px, 1fr))" gap={5}>
-                    <Box
-                      bg="#ffffff"
-                      borderRadius="6px"
-                      p={6}
-                      border="1px solid"
-                      borderColor="#e5e7eb"
-                      boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
-                    >
-                      <HStack mb={4} spacing={2} justify="space-between">
-                        <HStack spacing={2}>
-                          <Badge bg="#dcfce7" color="#16a34a" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
-                            EXCEEDING
-                          </Badge>
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">
-                            Shipped 5 days ago
-                          </Text>
-                        </HStack>
-                      </HStack>
-                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={2}>
-                        {selectedProduct === 'pmai' ? 'AI Sprint Planning Assistant' : 'Smart Prompt Suggestions'}
-                      </Text>
-                      <Text fontSize="sm" color="#4b5563" mb={4} lineHeight="1.7">
-                        {selectedProduct === 'pmai'
-                          ? 'Generated by Zeno AI based on user feedback. Automatically creates sprint plans with risk assessment.'
-                          : 'AI-powered prompt suggestions based on conversation context. Generated from community insights.'}
-                      </Text>
-                      <VStack align="stretch" spacing={3} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Adoption Rate</Text>
-                          <HStack spacing={2}>
-                            <Text fontWeight="700" color="#16a34a">84%</Text>
-                            <ArrowUpIcon w={3} h={3} color="#16a34a" />
-                          </HStack>
-                        </HStack>
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Weekly Active Users</Text>
-                          <Text fontWeight="700" color="#111827">
-                            {selectedProduct === 'pmai' ? '3,124' : '2,456'}
-                          </Text>
-                        </HStack>
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">User Satisfaction</Text>
-                          <HStack spacing={1}>
-                            {[1, 2, 3, 4, 5].map((i) => (
-                              <StarIcon key={i} w={3} h={3} color={i <= 4 ? '#fbbf24' : '#e5e7eb'} />
-                            ))}
-                            <Text fontSize="xs" fontWeight="600" color="#111827" ml={1}>4.6/5</Text>
-                          </HStack>
-                        </HStack>
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Time Saved</Text>
-                          <Text fontWeight="700" color="#16a34a">
-                            {selectedProduct === 'pmai' ? '3.2k hrs/week' : '1.8k hrs/week'}
-                          </Text>
-                        </HStack>
-                      </VStack>
-                    </Box>
 
+                  {prsLoading ? (
+                    <Center py={10}>
+                      <VStack spacing={4}>
+                        <Spinner
+                          thickness="4px"
+                          speed="0.65s"
+                          emptyColor="gray.200"
+                          color="#4b5563"
+                          size="xl"
+                        />
+                        <Text color="#6b7280" fontSize="sm" fontWeight="500">
+                          Fetching pull requests...
+                        </Text>
+                      </VStack>
+                    </Center>
+                  ) : prsError ? (
+                    <Box
+                      bg="#fef2f2"
+                      border="1px solid"
+                      borderColor="#fecaca"
+                      borderRadius="6px"
+                      p={4}
+                      mb={4}
+                    >
+                      <HStack spacing={2}>
+                        <Text color="#dc2626" fontSize="sm" fontWeight="600">
+                          Error: {prsError}
+                        </Text>
+                      </HStack>
+                    </Box>
+                  ) : prs.length === 0 ? (
                     <Box
                       bg="#ffffff"
-                      borderRadius="6px"
-                      p={6}
                       border="1px solid"
                       borderColor="#e5e7eb"
-                      boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
+                      borderRadius="6px"
+                      p={8}
+                      textAlign="center"
                     >
-                      <HStack mb={4} spacing={2} justify="space-between">
-                        <HStack spacing={2}>
-                          <Badge bg="#dbeafe" color="#2563eb" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
-                            ON TRACK
-                          </Badge>
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">
-                            Shipped 10 days ago
-                          </Text>
-                        </HStack>
-                      </HStack>
-                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={2}>
-                        {selectedProduct === 'pmai' ? 'Automated Risk Alerts' : 'Context-Aware Responses'}
+                      <Text color="#6b7280" fontSize="sm">
+                        No pull requests found. Create a PR using the "Push to GitHub PR" button in the Sandbox tab.
                       </Text>
-                      <Text fontSize="sm" color="#4b5563" mb={4} lineHeight="1.7">
-                        {selectedProduct === 'pmai'
-                          ? 'AI-generated risk detection system. Monitors project health and sends proactive alerts.'
-                          : 'Intelligent context management. AI maintains conversation flow across long sessions.'}
-                      </Text>
-                      <VStack align="stretch" spacing={3} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Adoption Rate</Text>
-                          <HStack spacing={2}>
-                            <Text fontWeight="700" color="#2563eb">67%</Text>
-                            <ArrowUpIcon w={3} h={3} color="#2563eb" />
-                          </HStack>
-                        </HStack>
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Weekly Active Users</Text>
-                          <Text fontWeight="700" color="#111827">
-                            {selectedProduct === 'pmai' ? '2,189' : '1,743'}
-                          </Text>
-                        </HStack>
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">User Satisfaction</Text>
-                          <HStack spacing={1}>
-                            {[1, 2, 3, 4, 5].map((i) => (
-                              <StarIcon key={i} w={3} h={3} color={i <= 4 ? '#fbbf24' : '#e5e7eb'} />
-                            ))}
-                            <Text fontSize="xs" fontWeight="600" color="#111827" ml={1}>4.3/5</Text>
-                          </HStack>
-                        </HStack>
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Impact</Text>
-                          <Text fontWeight="700" color="#2563eb">
-                            {selectedProduct === 'pmai' ? '45% fewer delays' : '38% better retention'}
-                          </Text>
-                        </HStack>
-                      </VStack>
                     </Box>
+                  ) : (
+                    <VStack spacing={4} align="stretch">
+                      {prs.map((pr) => {
+                        const getStatusBadge = () => {
+                          if (pr.merged) {
+                            return (
+                              <Badge bg="#ddd6fe" color="#7c3aed" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
+                                MERGED
+                              </Badge>
+                            );
+                          } else if (pr.draft) {
+                            return (
+                              <Badge bg="#f3f4f6" color="#4b5563" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
+                                DRAFT
+                              </Badge>
+                            );
+                          } else if (pr.state === 'open') {
+                            return (
+                              <Badge bg="#dcfce7" color="#16a34a" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
+                                OPEN
+                              </Badge>
+                            );
+                          } else {
+                            return (
+                              <Badge bg="#fee2e2" color="#dc2626" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
+                                CLOSED
+                              </Badge>
+                            );
+                          }
+                        };
 
-                    <Box
-                      bg="#ffffff"
-                      borderRadius="6px"
-                      p={6}
-                      border="1px solid"
-                      borderColor="#e5e7eb"
-                      boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
-                    >
-                      <HStack mb={4} spacing={2} justify="space-between">
-                        <HStack spacing={2}>
-                          <Badge bg="#fef3c7" color="#d97706" px={2.5} py={1} borderRadius="4px" fontSize="xs" fontWeight="700">
-                            MONITORING
-                          </Badge>
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">
-                            Shipped 2 days ago
-                          </Text>
-                        </HStack>
-                      </HStack>
-                      <Text fontSize="lg" fontWeight="700" color="#111827" mb={2}>
-                        {selectedProduct === 'pmai' ? 'Smart Dependency Mapping' : 'Prompt Performance Optimizer'}
-                      </Text>
-                      <Text fontSize="sm" color="#4b5563" mb={4} lineHeight="1.7">
-                        {selectedProduct === 'pmai'
-                          ? 'AI-generated dependency visualization. Automatically maps project relationships and bottlenecks.'
-                          : 'AI analyzes prompt effectiveness and suggests improvements. Generated from usage patterns.'}
-                      </Text>
-                      <VStack align="stretch" spacing={3} pt={4} borderTop="1px solid" borderColor="#e5e7eb">
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Adoption Rate</Text>
-                          <HStack spacing={2}>
-                            <Text fontWeight="700" color="#d97706">32%</Text>
-                            <Text fontSize="xs" color="#6b7280">Early days</Text>
-                          </HStack>
-                        </HStack>
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Weekly Active Users</Text>
-                          <Text fontWeight="700" color="#111827">
-                            {selectedProduct === 'pmai' ? '892' : '654'}
-                          </Text>
-                        </HStack>
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">User Satisfaction</Text>
-                          <HStack spacing={1}>
-                            {[1, 2, 3, 4, 5].map((i) => (
-                              <StarIcon key={i} w={3} h={3} color={i <= 3 ? '#fbbf24' : '#e5e7eb'} />
-                            ))}
-                            <Text fontSize="xs" fontWeight="600" color="#111827" ml={1}>3.9/5</Text>
-                          </HStack>
-                        </HStack>
-                        <HStack justify="space-between">
-                          <Text fontSize="xs" color="#6b7280" fontWeight="500">Impact</Text>
-                          <Text fontWeight="700" color="#6b7280">TBD</Text>
-                        </HStack>
-                      </VStack>
-                    </Box>
-                  </Grid>
+                        const formatDate = (dateString) => {
+                          if (!dateString) return 'N/A';
+                          const date = new Date(dateString);
+                          const now = new Date();
+                          const diffMs = now - date;
+                          const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                          
+                          if (diffDays === 0) return 'Today';
+                          if (diffDays === 1) return 'Yesterday';
+                          if (diffDays < 7) return `${diffDays} days ago`;
+                          if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
+                          return `${Math.floor(diffDays / 30)} months ago`;
+                        };
+
+                        return (
+                          <Box
+                            key={pr.number}
+                            bg="#ffffff"
+                            borderRadius="6px"
+                            p={6}
+                            border="1px solid"
+                            borderColor="#e5e7eb"
+                            boxShadow="0 2px 8px 0 rgba(0, 0, 0, 0.06)"
+                            _hover={{ boxShadow: '0 4px 12px 0 rgba(0, 0, 0, 0.1)' }}
+                            transition="all 0.2s"
+                          >
+                            <HStack mb={3} spacing={3} justify="space-between" align="flex-start">
+                              <HStack spacing={3} flex={1}>
+                                {getStatusBadge()}
+                                <VStack align="flex-start" spacing={1} flex={1}>
+                                  <HStack spacing={2}>
+                                    <Text fontSize="md" fontWeight="700" color="#111827">
+                                      #{pr.number}
+                                    </Text>
+                                    <Text fontSize="md" fontWeight="700" color="#111827" flex={1}>
+                                      {pr.title}
+                                    </Text>
+                                  </HStack>
+                                  <HStack spacing={4} fontSize="xs" color="#6b7280">
+                                    <Text>
+                                      {pr.head.ref} → {pr.base.ref}
+                                    </Text>
+                                    <Text>•</Text>
+                                    <Text>
+                                      {pr.state === 'open' ? 'Updated' : pr.merged ? 'Merged' : 'Closed'} {formatDate(pr.updated_at || pr.merged_at || pr.closed_at)}
+                                    </Text>
+                                  </HStack>
+                                </VStack>
+                              </HStack>
+                              <Button
+                                size="sm"
+                                leftIcon={<ExternalLinkIcon />}
+                                onClick={() => window.electronAPI.openExternal(pr.html_url)}
+                                bg="#4b5563"
+                                color="white"
+                                fontWeight="600"
+                                _hover={{ bg: '#374151' }}
+                              >
+                                View PR
+                              </Button>
+                            </HStack>
+                            {pr.body && (
+                              <Text fontSize="sm" color="#4b5563" mt={3} noOfLines={2}>
+                                {pr.body.replace(/[#*`]/g, '').trim()}
+                              </Text>
+                            )}
+                            {pr.labels && pr.labels.length > 0 && (
+                              <HStack spacing={2} mt={3} flexWrap="wrap">
+                                {pr.labels.map((label, idx) => (
+                                  <Badge
+                                    key={idx}
+                                    bg={`#${label.color}20`}
+                                    color={`#${label.color}`}
+                                    px={2}
+                                    py={0.5}
+                                    borderRadius="3px"
+                                    fontSize="xs"
+                                    fontWeight="500"
+                                  >
+                                    {label.name}
+                                  </Badge>
+                                ))}
+                              </HStack>
+                            )}
+                          </Box>
+                        );
+                      })}
+                    </VStack>
+                  )}
                 </Box>
               </Container>
             </TabPanel>
