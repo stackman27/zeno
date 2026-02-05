@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   runZeno: (options) => ipcRenderer.invoke('run-zeno', options),
   stopZeno: () => ipcRenderer.invoke('stop-zeno'),
+  resolvePath: (maybeRelativePath) => ipcRenderer.invoke('resolve-path', maybeRelativePath),
   onZenoOutput: (callback) => {
     ipcRenderer.on('zeno-output', (event, data) => callback(data));
   },
