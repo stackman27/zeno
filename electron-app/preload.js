@@ -14,5 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openChatWindow: () => ipcRenderer.invoke('open-chat-window'),
   closeChatWindow: () => ipcRenderer.invoke('close-chat-window'),
   isChatWindowOpen: () => ipcRenderer.invoke('is-chat-window-open'),
-  pushToGitHubPR: (options) => ipcRenderer.invoke('push-to-github-pr', options)
+  pushToGitHubPR: (options) => ipcRenderer.invoke('push-to-github-pr', options),
+  fetchGitHubPRs: (options) => ipcRenderer.invoke('fetch-github-prs', options),
+  verifyGitHubToken: () => ipcRenderer.invoke('verify-github-token')
 });

@@ -294,7 +294,7 @@ ipcMain.handle('push-to-github-pr', async (event, options) => {
    
     // Always create PR in chat-buddy repository as specified
     const owner = 'stackman27';
-    const repoName = 'chat-buddy';
+    const repoName = 'PEval';
 
     // Create branch name
     const branchName = `zeno-changes-${Date.now()}`;
@@ -336,11 +336,54 @@ ipcMain.handle('push-to-github-pr', async (event, options) => {
       stdio: 'inherit'
     });
 
-    // Step 4: Add all changes
+    // Step 4: Add all changes, but exclude log files
+    // Add all changes first
     execSync('git add -A', {
       cwd: absoluteRepoDir,
       stdio: 'inherit'
     });
+    
+    // Remove log files from staging (they shouldn't be committed)
+    // Pattern: python-server/c:/log/gpt/YYYY-MM-DD/*.json and *.txt
+    try {
+      // Find and unstage log files using git ls-files for more reliable pattern matching
+      const fs = require('fs');
+      const path = require('path');
+      
+      // Get list of staged files
+      const stagedFiles = execSync('git diff --cached --name-only', {
+        cwd: absoluteRepoDir,
+        encoding: 'utf-8'
+      }).trim().split('\n').filter(f => f.trim());
+      
+      // Filter out log files
+      const logFilesToUnstage = stagedFiles.filter(file => {
+        const normalized = file.replace(/\\/g, '/');
+        // Match patterns like python-server/c:/log/gpt/ or python-server/log/gpt/
+        return normalized.includes('/log/gpt/') || 
+               normalized.match(/python-server[\/\\]c:[\/\\]log[\/\\]gpt[\/\\]/) ||
+               (normalized.includes('log/gpt/') && (normalized.endsWith('.json') || normalized.endsWith('.txt')));
+      });
+      
+      // Unstage each log file
+      if (logFilesToUnstage.length > 0) {
+        // Use git reset for each file (more reliable than wildcards)
+        for (const logFile of logFilesToUnstage) {
+          try {
+            execSync(`git reset HEAD -- "${logFile}"`, {
+              cwd: absoluteRepoDir,
+              shell: true,
+              stdio: 'ignore'
+            });
+          } catch (e) {
+            // Ignore individual file errors
+          }
+        }
+      }
+    } catch (e) {
+      // If the exclusion logic fails, continue anyway - better to commit with logs than fail
+      console.warn('Warning: Could not exclude log files from commit:', e.message);
+    }
 
     // Step 5: Commit changes
     const commitMessage = options.commitMessage || `Zeno: Automated changes from ${new Date().toISOString()}`;
@@ -350,12 +393,12 @@ ipcMain.handle('push-to-github-pr', async (event, options) => {
     });
 
     // Step 6: Push to GitHub
-    // Push to origin (which should be the fork - stackman27/chat-buddy)
+    // Push to origin (which should be the fork - stackman27/PEval)
     // The token must belong to the fork owner (stackman27) to have write access
    // --- FORCE a clean HTTPS remote and inject token exactly once ---
 
   
-const remoteUrlWithToken = `https://${cleanToken}@github.com/stackman27/chat-buddy.git`;
+const remoteUrlWithToken = `https://${cleanToken}@github.com/stackman27/PEval.git`;
 
 execSync(`git remote set-url origin "${remoteUrlWithToken}"`, {
   cwd: absoluteRepoDir,
@@ -433,6 +476,233 @@ execSync(`git remote set-url origin "${remoteUrlWithToken}"`, {
       prUrl: prUrl,
       branchName: branchName,
       message: `Successfully created PR: ${prUrl}`
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// IPC handler for fetching PRs from GitHub
+ipcMain.handle('fetch-github-prs', async (event, options) => {
+  const https = require('https');
+  
+  try {
+    const owner = options.owner || 'stackman27';
+    const repoName = options.repoName || 'PEval';
+    const state = options.state || 'all'; // 'open', 'closed', or 'all'
+    const perPage = options.perPage || 30;
+    
+    // Get GitHub token from environment
+    const githubToken = process.env.GITHUB_TOKEN;
+    if (!githubToken) {
+      throw new Error('GITHUB_TOKEN environment variable not set. Please set it to fetch PRs.');
+    }
+    
+    const cleanToken = githubToken.trim();
+    if (cleanToken.length < 20) {
+      throw new Error('GITHUB_TOKEN appears to be invalid (too short). Please check your token.');
+    }
+    
+    // Build query string
+    const queryParams = new URLSearchParams({
+      state: state,
+      per_page: perPage.toString(),
+      sort: 'updated',
+      direction: 'desc'
+    });
+    
+    const path = `/repos/${owner}/${repoName}/pulls?${queryParams.toString()}`;
+    
+    const prs = await new Promise((resolve, reject) => {
+      const requestOptions = {
+        hostname: 'api.github.com',
+        path: path,
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${cleanToken}`,
+          'User-Agent': 'Zeno-Electron-App',
+          'Accept': 'application/vnd.github.v3+json'
+        }
+      };
+      
+      const req = https.request(requestOptions, (res) => {
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              const prs = JSON.parse(data);
+              resolve(prs);
+            } catch (parseError) {
+              reject(new Error(`Failed to parse GitHub API response: ${parseError.message}`));
+            }
+          } else {
+            reject(new Error(`GitHub API error: ${res.statusCode} - ${data}`));
+          }
+        });
+      });
+      
+      req.on('error', (error) => {
+        reject(error);
+      });
+      
+      req.end();
+    });
+    
+    // Get the authenticated user to filter PRs by author
+    let authenticatedUser = null;
+    try {
+      const userInfo = await new Promise((resolve, reject) => {
+        const userReq = https.request({
+          hostname: 'api.github.com',
+          path: '/user',
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${cleanToken}`,
+            'User-Agent': 'Zeno-Electron-App',
+            'Accept': 'application/vnd.github.v3+json'
+          }
+        }, (res) => {
+          let userData = '';
+          res.on('data', (chunk) => { userData += chunk; });
+          res.on('end', () => {
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              resolve(JSON.parse(userData));
+            } else {
+              reject(new Error(`Failed to get user info: ${res.statusCode}`));
+            }
+          });
+        });
+        userReq.on('error', reject);
+        userReq.end();
+      });
+      authenticatedUser = userInfo.login;
+    } catch (e) {
+      // If we can't get user info, continue without filtering
+      console.warn('Could not get authenticated user info:', e.message);
+    }
+    
+    // Format PRs to include only relevant information
+    // Filter to only show PRs created by the authenticated user (zenoAI-bot)
+    let formattedPRs = prs.map(pr => ({
+      number: pr.number,
+      title: pr.title,
+      state: pr.state, // 'open', 'closed'
+      merged: pr.merged || false,
+      draft: pr.draft || false,
+      html_url: pr.html_url,
+      created_at: pr.created_at,
+      updated_at: pr.updated_at,
+      merged_at: pr.merged_at,
+      closed_at: pr.closed_at,
+      user: {
+        login: pr.user?.login,
+        avatar_url: pr.user?.avatar_url
+      },
+      head: {
+        ref: pr.head?.ref,
+        sha: pr.head?.sha
+      },
+      base: {
+        ref: pr.base?.ref
+      },
+      body: pr.body || '',
+      labels: pr.labels || []
+    }));
+    
+    // Filter to only show PRs created by zenoAI-bot if we have the user info
+    if (authenticatedUser) {
+      formattedPRs = formattedPRs.filter(pr => pr.user.login === authenticatedUser);
+    }
+    
+    return {
+      success: true,
+      prs: formattedPRs,
+      count: formattedPRs.length
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message,
+      prs: []
+    };
+  }
+});
+
+// IPC handler for verifying GitHub token and getting user info
+ipcMain.handle('verify-github-token', async (event) => {
+  const https = require('https');
+  
+  try {
+    // Get GitHub token from environment
+    const githubToken = process.env.GITHUB_TOKEN;
+    if (!githubToken) {
+      return {
+        success: false,
+        error: 'GITHUB_TOKEN environment variable not set'
+      };
+    }
+    
+    const cleanToken = githubToken.trim();
+    if (cleanToken.length < 20) {
+      return {
+        success: false,
+        error: 'GITHUB_TOKEN appears to be invalid (too short)'
+      };
+    }
+    
+    // Verify token by getting authenticated user info
+    const userInfo = await new Promise((resolve, reject) => {
+      const requestOptions = {
+        hostname: 'api.github.com',
+        path: '/user',
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${cleanToken}`,
+          'User-Agent': 'Zeno-Electron-App',
+          'Accept': 'application/vnd.github.v3+json'
+        }
+      };
+      
+      const req = https.request(requestOptions, (res) => {
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              const user = JSON.parse(data);
+              resolve(user);
+            } catch (parseError) {
+              reject(new Error(`Failed to parse GitHub API response: ${parseError.message}`));
+            }
+          } else {
+            reject(new Error(`GitHub API error: ${res.statusCode} - ${data}`));
+          }
+        });
+      });
+      
+      req.on('error', (error) => {
+        reject(error);
+      });
+      
+      req.end();
+    });
+    
+    return {
+      success: true,
+      user: {
+        login: userInfo.login,
+        name: userInfo.name,
+        avatar_url: userInfo.avatar_url,
+        html_url: userInfo.html_url
+      }
     };
   } catch (error) {
     return {
