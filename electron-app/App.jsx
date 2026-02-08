@@ -1561,7 +1561,7 @@ function App() {
     <ChakraProvider theme={theme}>
       <Box minH="100vh" bg="#f9fafb" color="gray.800" position="relative" overflow="hidden">
         {/* Header - Dark header with logo, tabs, and status */}
-        <Tabs index={activeTab} onChange={setActiveTab} colorScheme="gray" isLazy>
+        <Tabs index={activeTab} onChange={setActiveTab} colorScheme="gray" lazyBehavior="keepMounted">
           <Box
             bg="#1f2937"
             borderBottom="1px solid"
