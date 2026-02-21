@@ -602,16 +602,31 @@ function App() {
     });
   };
 
-  // Aider session/chat plumbing (aider_two)
-  const [aiderSession, setAiderSession] = useState(null);
+  // Zeno assistant session/chat plumbing
+  const [codexSession, setCodexSession] = useState(null);
   const [isInitializingSession, setIsInitializingSession] = useState(false);
-  const [aiderModel, setAiderModel] = useState(() => localStorage.getItem('zeno_aider_model') || 'openai/gpt-4o-mini');
   const [currentJobId, setCurrentJobId] = useState(null);
   const [syncErrorJobId, setSyncErrorJobId] = useState(null);
   const streamAbortRef = useRef(null);
   const sessionInitPromiseRef = useRef(null);
   const streamingAssistantIdxRef = useRef(-1);
   const API_BASE_URL = 'http://127.0.0.1:8000';
+  const CHAT_THEME = {
+    panelBg: '#f1f5f9',
+    panelSurface: '#ffffff',
+    panelBorder: 'rgba(0, 0, 0, 0.08)',
+    headerBg: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+    headerText: '#1e293b',
+    subText: '#64748b',
+    accent: '#0ea5e9',
+    accentStrong: '#0284c7',
+    messageUserBg: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+    messageAssistantBg: '#ffffff',
+    messageBorder: 'rgba(0, 0, 0, 0.08)',
+    inputBg: '#ffffff',
+    inputBorder: 'rgba(0, 0, 0, 0.1)',
+    inputGlow: 'rgba(14, 165, 233, 0.2)',
+  };
   const chatEndRef = useRef(null);
   const chatScrollRef = useRef(null);
   const [formData, setFormData] = useState({
@@ -834,6 +849,20 @@ function App() {
       addStatus(`✅ API at: ${apiMatch[1]}`);
     }
     
+    // Docker client too old (API version mismatch)
+    if (rawText.match(/client version .* is too old|Minimum supported API version/i)) {
+      addStatus('💡 Upgrade Docker: client is older than daemon. Update Docker Desktop or run: brew upgrade docker');
+    }
+    // Other errors
+    const zenoErrorMatch = rawText.match(/error:\s*(.+?)(?:\n|$)/);
+    if (zenoErrorMatch) {
+      addStatus(`❌ ${zenoErrorMatch[1].trim()}`);
+    }
+    const fatalMatch = rawText.match(/(?:\[stderr\]\s*)?fatal:\s*(.+?)(?:\n|$)/);
+    if (fatalMatch) {
+      addStatus(`❌ Git: ${fatalMatch[1].trim()}`);
+    }
+    
     // Return status messages in order
     return statusMessages.join('\n');
   };
@@ -850,10 +879,6 @@ function App() {
     // Fallback anchor scroll
     chatEndRef.current?.scrollIntoView({ behavior, block: 'end' });
   };
-
-  useEffect(() => {
-    localStorage.setItem('zeno_aider_model', aiderModel || '');
-  }, [aiderModel]);
 
   useEffect(() => {
     // Auto-scroll as messages arrive (including streaming)
@@ -1027,7 +1052,7 @@ function App() {
   };
 
   const initializeSession = async () => {
-    if (aiderSession) return aiderSession;
+    if (codexSession) return codexSession;
     if (sessionInitPromiseRef.current) return sessionInitPromiseRef.current;
 
     setIsInitializingSession(true);
@@ -1044,7 +1069,7 @@ function App() {
       sessionInitPromiseRef.current = p;
       const session = await p;
 
-      setAiderSession(session);
+      setCodexSession(session);
       setChatMessages((prev) => [
         ...prev,
         { role: 'assistant', content: `Connected to ${session.workspace_path}` },
@@ -1200,24 +1225,18 @@ function App() {
         streamAbortRef.current.abort();
         streamAbortRef.current = null;
       }
-      // Prefer /api proxy route if available, otherwise fall back.
-      try {
-        await apiFetch(`/api/jobs/${encodeURIComponent(currentJobId)}`, { method: 'DELETE' });
-      } catch (e) {
-        if (!String(e?.message || '').startsWith('404')) throw e;
-        await apiFetch(`/jobs/${encodeURIComponent(currentJobId)}`, { method: 'DELETE' });
-      }
+      await apiFetch(`/jobs/${encodeURIComponent(currentJobId)}`, { method: 'DELETE' });
       setChatMessages((prev) => [...prev, { role: 'assistant', content: 'Cancelled job.' }]);
     } finally {
       setCurrentJobId(null);
     }
   };
 
-  const handleSendToAider = async () => {
+  const handleSendToCodex = async () => {
     const messageText = chatInput.trim();
     if (!messageText) return;
 
-    let session = aiderSession;
+    let session = codexSession;
     if (!session) {
       session = await initializeSession();
     }
@@ -1237,14 +1256,9 @@ function App() {
     });
     setChatInput('');
 
-    const modelToSend = (aiderModel || '').trim();
-    if (!modelToSend) {
-      throw new Error("Set a model (e.g. openai/gpt-4o-mini, anthropic/claude-3-5-sonnet-20241022)");
-    }
-
     const job = await apiFetch(`/sessions/${encodeURIComponent(session.session_id)}/edits`, {
       method: 'POST',
-      body: JSON.stringify({ message: messageText, model: modelToSend }),
+      body: JSON.stringify({ message: messageText }),
     });
     setCurrentJobId(job.job_id);
 
@@ -1933,7 +1947,7 @@ function App() {
                                   // Ensure dir is populated too (chat + backend session init depends on it)
                                   setFormData(prev => ({
                                     ...prev,
-                                    repo: `https://github.com/${repo.fullName}`,
+                                    repo: `git@github.com:${repo.fullName}.git`,
                                     dir: `repos/${repo.name}`,
                                   }));
                                   setAiAgentMessages(prev => [...prev, {
@@ -2527,42 +2541,50 @@ function App() {
 
                   {/* AI Assistant Sidebar (non-obstructing, lives in its own column) */}
                   <Box
-                    w={chatOpen ? '400px' : '0px'}
-                    bg="#ffffff"
+                    w={chatOpen ? '420px' : '0px'}
+                    bg={CHAT_THEME.panelBg}
                     borderLeft={chatOpen ? '1px solid' : '0'}
-                    borderColor="#e5e7eb"
+                    borderColor={CHAT_THEME.panelBorder}
                     display="flex"
                     flexDirection="column"
                     flexShrink={0}
                     overflow="hidden"
-                    boxShadow={chatOpen ? '-2px 0 16px rgba(0, 0, 0, 0.1)' : 'none'}
-                    transition="width 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
+                    boxShadow={chatOpen ? '-4px 0 20px rgba(0, 0, 0, 0.08)' : 'none'}
+                    transition="width 0.35s cubic-bezier(0.4, 0, 0.2, 1)"
                     pointerEvents={chatOpen ? 'auto' : 'none'}
                     opacity={chatOpen ? 1 : 0}
+                    backdropFilter="blur(6px)"
                   >
-                {/* Chat Header - Dark */}
+                {/* Chat Header */}
                 <Box
                   px={4}
                   py={3}
                   borderBottom="1px solid"
-                  borderColor="#4b5563"
+                  borderColor={CHAT_THEME.panelBorder}
                   display="flex"
                   alignItems="center"
                   justifyContent="space-between"
-                  bg="#374151"
+                  bg={CHAT_THEME.headerBg}
                   flexShrink={0}
                 >
                   <HStack spacing={2}>
-                    <Text fontSize="md" color="#f3f4f6" fontWeight="600">
-                      AI Assistant
+                    <Box
+                      w="8px"
+                      h="8px"
+                      borderRadius="999px"
+                      bg={CHAT_THEME.accent}
+                      boxShadow="0 0 8px rgba(14, 165, 233, 0.4)"
+                    />
+                    <Text fontSize="md" color={CHAT_THEME.headerText} fontWeight="600">
+                      Zeno Assistant
                     </Text>
                     {chatMessages.length > 0 && (
                       <Badge
-                        bg="#4b5563"
-                        color="#d1d5db"
+                        bg="gray.100"
+                        color={CHAT_THEME.subText}
                         px={2}
                         py={0.5}
-                        borderRadius="3px"
+                        borderRadius="999px"
                         fontSize="xs"
                         fontWeight="600"
                       >
@@ -2576,8 +2598,8 @@ function App() {
                     variant="ghost"
                     size="sm"
                     aria-label="Close chat"
-                    color="#d1d5db"
-                    _hover={{ bg: '#4b5563', color: '#f3f4f6' }}
+                    color={CHAT_THEME.subText}
+                    _hover={{ bg: 'gray.100', color: CHAT_THEME.headerText }}
                   />
                 </Box>
 
@@ -2590,14 +2612,15 @@ function App() {
                   display="flex"
                   flexDirection="column"
                   gap={4}
-                  bg="#f9fafb"
+                  bg={CHAT_THEME.panelBg}
+                  backgroundImage="radial-gradient(circle at 10% 10%, rgba(56, 189, 248, 0.06), transparent 45%), radial-gradient(circle at 85% 0%, rgba(99, 102, 241, 0.06), transparent 35%)"
                 >
                   {chatMessages.length === 0 ? (
                     <Box textAlign="center" py={16}>
-                      <Text color="#6b7280" fontSize="md" fontWeight="500" mb={2}>
+                      <Text color={CHAT_THEME.subText} fontSize="md" fontWeight="500" mb={2}>
                         Ask for changes to your application
                       </Text>
-                      <Text color="#9ca3af" fontSize="sm">
+                      <Text color="#64748b" fontSize="sm">
                         Type a message below to get started
                       </Text>
                     </Box>
@@ -2609,18 +2632,23 @@ function App() {
                         maxW="85%"
                       >
                         <Box
-                          bg={msg.role === 'user' ? '#4b5563' : '#ffffff'}
-                          color={msg.role === 'user' ? 'white' : '#111827'}
-                          border={msg.role === 'user' ? '0' : '1px solid'}
-                          borderColor={msg.role === 'user' ? 'transparent' : '#e5e7eb'}
-                          boxShadow={msg.role === 'user' ? 'none' : '0 1px 2px rgba(0,0,0,0.05)'}
+                          bg={msg.role === 'user' ? CHAT_THEME.messageUserBg : CHAT_THEME.messageAssistantBg}
+                          color={msg.role === 'user' ? 'white' : '#1e293b'}
+                          border={msg.role === 'user' ? '1px solid' : '1px solid'}
+                          borderColor={msg.role === 'user' ? 'rgba(59, 130, 246, 0.5)' : CHAT_THEME.messageBorder}
+                          boxShadow={msg.role === 'user' ? '0 8px 24px rgba(37, 99, 235, 0.25)' : '0 1px 3px rgba(0,0,0,0.08)'}
                           px={4}
                           py={3}
-                          borderRadius="6px"
+                          borderRadius="12px"
                           fontSize="sm"
                           lineHeight="1.75"
                         >
                           {renderChatContent(msg.content)}
+                          {currentJobId && idx === streamingAssistantIdxRef.current && msg.role === 'assistant' && (
+                            <Text mt={2} fontSize="xs" color={CHAT_THEME.subText}>
+                              Streaming…
+                            </Text>
+                          )}
                         </Box>
                       </Box>
                     ))
@@ -2629,33 +2657,47 @@ function App() {
                   <Box ref={chatEndRef} />
                 </Box>
 
-                {/* Chat Input */}
+                {/* Chat Input — light pill style */}
                 <Box
                   px={4}
                   py={4}
                   borderTop="1px solid"
-                  borderColor="#e5e7eb"
-                  bg="#ffffff"
+                  borderColor="rgba(0,0,0,0.06)"
+                  bg="#f8fafc"
                   flexShrink={0}
                 >
-                  <HStack spacing={3}>
+                  <HStack
+                    as="form"
+                    onSubmit={(e) => { e.preventDefault(); }}
+                    spacing={0}
+                    bg="white"
+                    borderRadius="9999px"
+                    border="1px solid"
+                    borderColor="gray.200"
+                    boxShadow="0 1px 2px rgba(0,0,0,0.04)"
+                    overflow="hidden"
+                    align="center"
+                    pr={1}
+                    _focusWithin={{ borderColor: 'gray.300', boxShadow: '0 0 0 3px rgba(0,0,0,0.06)' }}
+                  >
                     <Input
                       value={chatInput}
                       onChange={(e) => setChatInput(e.target.value)}
-                      placeholder="Ask for changes..."
-                      bg="#ffffff"
-                      borderColor="#d1d5db"
-                      borderWidth="1px"
-                      size="md"
-                      fontSize="14px"
+                      placeholder="Send message..."
+                      variant="unstyled"
+                      flex={1}
+                      py={3}
+                      pl={5}
+                      pr={2}
+                      fontSize="15px"
                       fontWeight="400"
-                      letterSpacing="-0.01em"
+                      color="gray.800"
                       onKeyDown={(e) => {
                         if (e.key !== 'Enter') return;
                         if (!chatInput.trim()) return;
                         if (currentJobId || isInitializingSession) return;
                         e.preventDefault();
-                        handleSendToAider().catch((err) => {
+                        handleSendToCodex().catch((err) => {
                           setChatMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${err.message}` }]);
                           toast({
                             title: 'Chat request failed',
@@ -2666,18 +2708,30 @@ function App() {
                           });
                         });
                       }}
-                      _hover={{ borderColor: '#9ca3af', bg: '#f9fafb' }}
-                      _focus={{ borderColor: '#6b7280', boxShadow: '0 0 0 3px rgba(107, 114, 128, 0.1)', bg: '#ffffff' }}
-                      _placeholder={{ color: '#9ca3af', fontWeight: '400', opacity: 1 }}
+                      _placeholder={{ color: 'gray.400', fontWeight: '400' }}
                     />
-                    <Button
-                      size="md"
-                      bg="#4b5563"
+                    <IconButton
+                      aria-label="Attach"
+                      icon={<AddIcon />}
+                      size="sm"
+                      variant="ghost"
+                      borderRadius="full"
+                      color="gray.500"
+                      _hover={{ bg: 'gray.100', color: 'gray.700' }}
+                      mr={1}
+                    />
+                    <IconButton
+                      aria-label="Send"
+                      icon={<ArrowUpIcon />}
+                      size="sm"
+                      borderRadius="full"
+                      bg="gray.700"
                       color="white"
+                      _hover={{ bg: 'gray.800' }}
                       onClick={() => {
                         if (!chatInput.trim()) return;
                         if (currentJobId || isInitializingSession) return;
-                        handleSendToAider().catch((err) => {
+                        handleSendToCodex().catch((err) => {
                           setChatMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${err.message}` }]);
                           toast({
                             title: 'Chat request failed',
@@ -2689,16 +2743,11 @@ function App() {
                         });
                       }}
                       isDisabled={!chatInput.trim() || Boolean(currentJobId) || isInitializingSession}
-                      _hover={{ bg: '#374151' }}
-                      fontWeight="600"
-                      px={6}
-                    >
-                      Send
-                    </Button>
+                    />
                   </HStack>
                   {currentJobId && (
                     <HStack mt={2} justify="space-between">
-                      <Text fontSize="xs" color="#6b7280">
+                      <Text fontSize="xs" color="gray.500">
                         Running job: {String(currentJobId).slice(0, 8)}…
                       </Text>
                       <Button
