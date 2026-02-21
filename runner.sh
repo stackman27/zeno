@@ -25,8 +25,10 @@ cd /repo || { echo "/repo not mounted" >&2; exit 65; }
 PROJECT_VENV="/work/venv"
 
 ensure_project_venv() {
-  python3 -m venv "$PROJECT_VENV"
-  "$PROJECT_VENV/bin/python" -m pip install -U pip
+  if [ ! -d "$PROJECT_VENV" ] || [ ! -f "$PROJECT_VENV/bin/python" ]; then
+    python3 -m venv "$PROJECT_VENV"
+    "$PROJECT_VENV/bin/python" -m pip install -U pip --quiet
+  fi
 }
 
 run_monorepo_polyglot() {
@@ -45,13 +47,34 @@ run_monorepo_polyglot() {
 
     ensure_project_venv
     if [ -f requirements.txt ]; then
-      "$PROJECT_VENV/bin/python" -m pip install -r requirements.txt
-      "$PROJECT_VENV/bin/python" -m pip install "werkzeug<3"
+      # Check if requirements.txt changed
+      NEED_PIP_INSTALL=false
+      if [ ! -f /work/python-server/.requirements.hash ]; then
+        NEED_PIP_INSTALL=true
+      else
+        CURRENT_REQ_HASH=$(md5sum requirements.txt 2>/dev/null | cut -d' ' -f1 || md5 -q requirements.txt 2>/dev/null || echo "")
+        CACHED_REQ_HASH=$(cat /work/python-server/.requirements.hash 2>/dev/null || echo "")
+        if [ "$CURRENT_REQ_HASH" != "$CACHED_REQ_HASH" ]; then
+          NEED_PIP_INSTALL=true
+        fi
+      fi
+      
+      if [ "$NEED_PIP_INSTALL" = "true" ]; then
+        "$PROJECT_VENV/bin/python" -m pip install -r requirements.txt --quiet
+        "$PROJECT_VENV/bin/python" -m pip install "werkzeug<3" --quiet
+        # Cache requirements.txt hash
+        md5sum requirements.txt 2>/dev/null | cut -d' ' -f1 > /work/python-server/.requirements.hash || \
+        md5 -q requirements.txt 2>/dev/null > /work/python-server/.requirements.hash || true
+      fi
     fi
 
+# Only download NLTK data if not already cached
 "$PROJECT_VENV/bin/python" - <<'PY'
 import nltk, os
-nltk.download("punkt", download_dir=os.environ["NLTK_DATA"], quiet=True)
+nltk_data_dir = os.environ["NLTK_DATA"]
+punkt_path = os.path.join(nltk_data_dir, "tokenizers", "punkt")
+if not os.path.exists(punkt_path):
+    nltk.download("punkt", download_dir=nltk_data_dir, quiet=True)
 PY
 
     "$PROJECT_VENV/bin/python" -m main &
@@ -86,10 +109,31 @@ if [ ! -L node_modules ]; then
   ln -s /work/react-node_modules/node_modules node_modules
 fi
 
-  # Install deps only if missing
-  if [ ! -x node_modules/.bin/react-scripts ]; then
-    rm -rf /work/react-node_modules/node_modules/*
-    npm install
+  # Check if we need to reinstall (missing deps or package.json changed)
+  NEED_INSTALL=false
+  if [ ! -x node_modules/.bin/react-scripts ] 2>/dev/null; then
+    NEED_INSTALL=true
+  elif [ -f package.json ]; then
+    # Compare package.json hash
+    CURRENT_HASH=$(md5sum package.json 2>/dev/null | cut -d' ' -f1 || md5 -q package.json 2>/dev/null || echo "")
+    CACHED_HASH=$(cat /work/react-node_modules/.package.json.hash 2>/dev/null || echo "")
+    if [ -z "$CACHED_HASH" ] || [ "$CURRENT_HASH" != "$CACHED_HASH" ]; then
+      NEED_INSTALL=true
+    fi
+  else
+    NEED_INSTALL=true
+  fi
+
+  if [ "$NEED_INSTALL" = "true" ]; then
+    echo "Installing React dependencies..." >&2
+    npm install --silent
+    # Cache package.json hash
+    if [ -f package.json ]; then
+      md5sum package.json 2>/dev/null | cut -d' ' -f1 > /work/react-node_modules/.package.json.hash || \
+      md5 -q package.json 2>/dev/null > /work/react-node_modules/.package.json.hash || true
+    fi
+  else
+    echo "Using cached React dependencies" >&2
   fi
 
   # Watch reliability on bind mounts
@@ -137,10 +181,50 @@ fi
 
   trap 'kill ${FRONT_PROXY_PID:-} ${BACK_PROXY_PID:-} ${FRONT_PID:-} ${BACK_PID:-} 2>/dev/null || true' INT TERM
 
+  # Give services a moment to start and verify they're running
+  sleep 2
+  
+  # Verify processes are still alive
+  if $want_ui && [ -n "${FRONT_PID:-}" ] && ! kill -0 "$FRONT_PID" 2>/dev/null; then
+    echo "Frontend process exited immediately" >&2
+    exit 1
+  fi
+  if $want_api && [ -n "${BACK_PID:-}" ] && ! kill -0 "$BACK_PID" 2>/dev/null; then
+    echo "Backend process exited immediately" >&2
+    exit 1
+  fi
+
+  # Services are running - log status
+  if $want_ui && $want_api; then
+    echo "Services running (monitoring frontend and backend)..." >&2
+  elif $want_ui; then
+    echo "Frontend service running..." >&2
+  elif $want_api; then
+    echo "Backend service running..." >&2
+  fi
+
   # Wait for whichever is supposed to be alive
-  if $want_ui && [ "${FRONT_PID:-}" != "" ]; then
+  # If both are running, wait for either to exit (which indicates an error)
+  if $want_ui && $want_api && [ -n "${FRONT_PID:-}" ] && [ -n "${BACK_PID:-}" ]; then
+    # Poll both processes - exit if either dies
+    while kill -0 "$FRONT_PID" 2>/dev/null && kill -0 "$BACK_PID" 2>/dev/null; do
+      sleep 1
+    done
+    # One of them exited - check which and get exit code
+    if ! kill -0 "$FRONT_PID" 2>/dev/null; then
+      wait "$FRONT_PID" || true
+      EXIT_CODE=$?
+      kill ${BACK_PID:-} ${BACK_PROXY_PID:-} 2>/dev/null || true
+      exit ${EXIT_CODE:-1}
+    elif ! kill -0 "$BACK_PID" 2>/dev/null; then
+      wait "$BACK_PID" || true
+      EXIT_CODE=$?
+      kill ${FRONT_PID:-} ${FRONT_PROXY_PID:-} 2>/dev/null || true
+      exit ${EXIT_CODE:-1}
+    fi
+  elif $want_ui && [ -n "${FRONT_PID:-}" ]; then
     wait "$FRONT_PID"
-  elif $want_api && [ "${BACK_PID:-}" != "" ]; then
+  elif $want_api && [ -n "${BACK_PID:-}" ]; then
     wait "$BACK_PID"
   else
     echo "monorepo detected but requested service not started (SERVICE=$SERVICE)" >&2
@@ -162,11 +246,51 @@ pick_python_entry() {
 run_python() {
   if [ -f requirements.txt ]; then
     ensure_project_venv
-    "$PROJECT_VENV/bin/python" -m pip install -r requirements.txt
+    # Check if requirements.txt changed
+    NEED_PIP_INSTALL=false
+    if [ ! -f /work/.requirements.hash ]; then
+      NEED_PIP_INSTALL=true
+    else
+      CURRENT_REQ_HASH=$(md5sum requirements.txt 2>/dev/null | cut -d' ' -f1 || md5 -q requirements.txt 2>/dev/null || echo "")
+      CACHED_REQ_HASH=$(cat /work/.requirements.hash 2>/dev/null || echo "")
+      if [ "$CURRENT_REQ_HASH" != "$CACHED_REQ_HASH" ]; then
+        NEED_PIP_INSTALL=true
+      fi
+    fi
+    
+    if [ "$NEED_PIP_INSTALL" = "true" ]; then
+      echo "Installing Python dependencies..." >&2
+      "$PROJECT_VENV/bin/python" -m pip install -r requirements.txt --quiet
+      # Cache requirements.txt hash
+      md5sum requirements.txt 2>/dev/null | cut -d' ' -f1 > /work/.requirements.hash || \
+      md5 -q requirements.txt 2>/dev/null > /work/.requirements.hash || true
+    else
+      echo "Using cached Python dependencies" >&2
+    fi
   elif [ -f pyproject.toml ]; then
     # For now: require requirements.txt for run-mode repos, or implement pyproject installs later.
     ensure_project_venv
-    "$PROJECT_VENV/bin/python" -m pip install -e .
+    # Check if pyproject.toml changed
+    NEED_PIP_INSTALL=false
+    if [ ! -f /work/.pyproject.hash ]; then
+      NEED_PIP_INSTALL=true
+    else
+      CURRENT_HASH=$(md5sum pyproject.toml 2>/dev/null | cut -d' ' -f1 || md5 -q pyproject.toml 2>/dev/null || echo "")
+      CACHED_HASH=$(cat /work/.pyproject.hash 2>/dev/null || echo "")
+      if [ "$CURRENT_HASH" != "$CACHED_HASH" ]; then
+        NEED_PIP_INSTALL=true
+      fi
+    fi
+    
+    if [ "$NEED_PIP_INSTALL" = "true" ]; then
+      echo "Installing Python dependencies..." >&2
+      "$PROJECT_VENV/bin/python" -m pip install -e . --quiet
+      # Cache pyproject.toml hash
+      md5sum pyproject.toml 2>/dev/null | cut -d' ' -f1 > /work/.pyproject.hash || \
+      md5 -q pyproject.toml 2>/dev/null > /work/.pyproject.hash || true
+    else
+      echo "Using cached Python dependencies" >&2
+    fi
   fi
 
   case "$WORKFLOW" in
@@ -194,14 +318,74 @@ run_python() {
 }
 
 run_node() {
-  if [ -f pnpm-lock.yaml ]; then
-    pnpm install --frozen-lockfile
-  elif [ -f yarn.lock ]; then
-    yarn install --frozen-lockfile
-  elif [ -f package-lock.json ]; then
-    npm ci
+  # npm cache locations (avoid writing into repo mount)
+  export NPM_CONFIG_PREFIX="/work/npm-global"
+  export npm_config_cache="/work/.npm-cache"
+  mkdir -p "$NPM_CONFIG_PREFIX" "$npm_config_cache"
+
+  # Keep deps in /work, but present them as ./node_modules
+  mkdir -p /work/node_modules_cache/node_modules
+  if [ ! -L node_modules ]; then
+    rm -rf node_modules
+    ln -s /work/node_modules_cache/node_modules node_modules
+  fi
+
+  # Check if we need to reinstall (missing deps or package files changed)
+  NEED_INSTALL=false
+  # Check if node_modules exists and has content (follow symlink)
+  if [ ! -d /work/node_modules_cache/node_modules ] || [ ! "$(ls -A /work/node_modules_cache/node_modules 2>/dev/null)" ]; then
+    NEED_INSTALL=true
+  elif [ -f package.json ]; then
+    # Check if package.json or lock files changed
+    CURRENT_PKG_HASH=$(md5sum package.json 2>/dev/null | cut -d' ' -f1 || md5 -q package.json 2>/dev/null || echo "")
+    CACHED_PKG_HASH=$(cat /work/node_modules_cache/.package.json.hash 2>/dev/null || echo "")
+    
+    LOCK_FILE=""
+    LOCK_HASH=""
+    if [ -f pnpm-lock.yaml ]; then
+      LOCK_FILE="pnpm-lock.yaml"
+      LOCK_HASH=$(md5sum pnpm-lock.yaml 2>/dev/null | cut -d' ' -f1 || md5 -q pnpm-lock.yaml 2>/dev/null || echo "")
+    elif [ -f yarn.lock ]; then
+      LOCK_FILE="yarn.lock"
+      LOCK_HASH=$(md5sum yarn.lock 2>/dev/null | cut -d' ' -f1 || md5 -q yarn.lock 2>/dev/null || echo "")
+    elif [ -f package-lock.json ]; then
+      LOCK_FILE="package-lock.json"
+      LOCK_HASH=$(md5sum package-lock.json 2>/dev/null | cut -d' ' -f1 || md5 -q package-lock.json 2>/dev/null || echo "")
+    fi
+    
+    CACHED_LOCK_HASH=$(cat /work/node_modules_cache/.lock.hash 2>/dev/null || echo "")
+    
+    if [ -z "$CACHED_PKG_HASH" ] || [ "$CURRENT_PKG_HASH" != "$CACHED_PKG_HASH" ]; then
+      NEED_INSTALL=true
+    elif [ -n "$LOCK_FILE" ] && ([ -z "$CACHED_LOCK_HASH" ] || [ "$LOCK_HASH" != "$CACHED_LOCK_HASH" ]); then
+      NEED_INSTALL=true
+    fi
   else
-    npm install
+    NEED_INSTALL=true
+  fi
+
+  if [ "$NEED_INSTALL" = "true" ]; then
+    echo "Installing Node dependencies..." >&2
+    if [ -f pnpm-lock.yaml ]; then
+      pnpm install --frozen-lockfile --silent
+    elif [ -f yarn.lock ]; then
+      yarn install --frozen-lockfile --silent
+    elif [ -f package-lock.json ]; then
+      npm ci --silent
+    else
+      npm install --silent
+    fi
+    # Cache package.json and lock file hashes
+    if [ -f package.json ]; then
+      md5sum package.json 2>/dev/null | cut -d' ' -f1 > /work/node_modules_cache/.package.json.hash || \
+      md5 -q package.json 2>/dev/null > /work/node_modules_cache/.package.json.hash || true
+    fi
+    if [ -n "$LOCK_FILE" ] && [ -f "$LOCK_FILE" ]; then
+      md5sum "$LOCK_FILE" 2>/dev/null | cut -d' ' -f1 > /work/node_modules_cache/.lock.hash || \
+      md5 -q "$LOCK_FILE" 2>/dev/null > /work/node_modules_cache/.lock.hash || true
+    fi
+  else
+    echo "Using cached Node dependencies" >&2
   fi
 
   case "$WORKFLOW" in
@@ -250,18 +434,62 @@ run_electron() {
     ln -s /work/electron-node_modules/node_modules node_modules
   fi
 
-  # Install deps only if missing
-  if [ ! -d node_modules/.bin/electron ]; then
-    rm -rf /work/electron-node_modules/node_modules/*
+  # Check if we need to reinstall (missing deps or package files changed)
+  NEED_INSTALL=false
+  # Check if node_modules exists and has electron binary (follow symlink)
+  if [ ! -d /work/electron-node_modules/node_modules/.bin ] || [ ! -f /work/electron-node_modules/node_modules/.bin/electron ]; then
+    NEED_INSTALL=true
+  elif [ -f package.json ]; then
+    # Check if package.json or lock files changed
+    CURRENT_PKG_HASH=$(md5sum package.json 2>/dev/null | cut -d' ' -f1 || md5 -q package.json 2>/dev/null || echo "")
+    CACHED_PKG_HASH=$(cat /work/electron-node_modules/.package.json.hash 2>/dev/null || echo "")
+    
+    LOCK_FILE=""
+    LOCK_HASH=""
     if [ -f pnpm-lock.yaml ]; then
-      pnpm install --frozen-lockfile
+      LOCK_FILE="pnpm-lock.yaml"
+      LOCK_HASH=$(md5sum pnpm-lock.yaml 2>/dev/null | cut -d' ' -f1 || md5 -q pnpm-lock.yaml 2>/dev/null || echo "")
     elif [ -f yarn.lock ]; then
-      yarn install --frozen-lockfile
+      LOCK_FILE="yarn.lock"
+      LOCK_HASH=$(md5sum yarn.lock 2>/dev/null | cut -d' ' -f1 || md5 -q yarn.lock 2>/dev/null || echo "")
     elif [ -f package-lock.json ]; then
-      npm ci
-    else
-      npm install
+      LOCK_FILE="package-lock.json"
+      LOCK_HASH=$(md5sum package-lock.json 2>/dev/null | cut -d' ' -f1 || md5 -q package-lock.json 2>/dev/null || echo "")
     fi
+    
+    CACHED_LOCK_HASH=$(cat /work/electron-node_modules/.lock.hash 2>/dev/null || echo "")
+    
+    if [ -z "$CACHED_PKG_HASH" ] || [ "$CURRENT_PKG_HASH" != "$CACHED_PKG_HASH" ]; then
+      NEED_INSTALL=true
+    elif [ -n "$LOCK_FILE" ] && ([ -z "$CACHED_LOCK_HASH" ] || [ "$LOCK_HASH" != "$CACHED_LOCK_HASH" ]); then
+      NEED_INSTALL=true
+    fi
+  else
+    NEED_INSTALL=true
+  fi
+
+  if [ "$NEED_INSTALL" = "true" ]; then
+    echo "Installing Electron dependencies..." >&2
+    if [ -f pnpm-lock.yaml ]; then
+      pnpm install --frozen-lockfile --silent
+    elif [ -f yarn.lock ]; then
+      yarn install --frozen-lockfile --silent
+    elif [ -f package-lock.json ]; then
+      npm ci --silent
+    else
+      npm install --silent
+    fi
+    # Cache package.json and lock file hashes
+    if [ -f package.json ]; then
+      md5sum package.json 2>/dev/null | cut -d' ' -f1 > /work/electron-node_modules/.package.json.hash || \
+      md5 -q package.json 2>/dev/null > /work/electron-node_modules/.package.json.hash || true
+    fi
+    if [ -n "$LOCK_FILE" ] && [ -f "$LOCK_FILE" ]; then
+      md5sum "$LOCK_FILE" 2>/dev/null | cut -d' ' -f1 > /work/electron-node_modules/.lock.hash || \
+      md5 -q "$LOCK_FILE" 2>/dev/null > /work/electron-node_modules/.lock.hash || true
+    fi
+  else
+    echo "Using cached Electron dependencies" >&2
   fi
 
   case "$WORKFLOW" in
